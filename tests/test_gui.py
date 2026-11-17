@@ -157,14 +157,15 @@ def test_gui_defaults_to_history_and_explains_zero_motion(app, tmp_path):
 @pytest.mark.parametrize("direction", ["up", "down"])
 @pytest.mark.parametrize("mode",['all','limited'])
 @pytest.mark.parametrize('debug',[False,True])
-def test_gui_passes_selected_direction_to_capture_worker(app, tmp_path, monkeypatch, direction, mode,debug):
+@pytest.mark.parametrize('backend',['foreground','background'])
+def test_gui_passes_selected_direction_to_capture_worker(app, tmp_path, monkeypatch, direction, mode,debug,backend):
     from welog import gui
 
     calls = []
 
     class FakeWorker:
         def __init__(self, target_value, roi, guard, output, config):
-            calls.append((config.direction,config.max_frames,config.debug_save_images))
+            calls.append((config.direction,config.max_frames,config.debug_save_images,config.capture_backend))
             signal = SimpleNamespace(connect=lambda *args: None)
             self.progress = self.result_ready = self.failed = self.finished = signal
         def start(self):
@@ -181,11 +182,48 @@ def test_gui_passes_selected_direction_to_capture_worker(app, tmp_path, monkeypa
     window.direction.setCurrentIndex(window.direction.findData(direction))
     window.capture_mode.setCurrentIndex(window.capture_mode.findData(mode))
     window.frame_limit.setValue(37)
+    window.backend.setCurrentIndex(window.backend.findData(backend))
     assert not window.debug_images.isChecked()
     window.debug_images.setChecked(debug)
     assert ('保存聊天区截图' if debug else '不保存截图') in window.storage_hint.text()
     assert ('开始调试' in window.pick_button.text())==debug
     window.start_capture()
-    assert calls == [("activate_fake", 123), (direction,0 if mode=='all' else 37,debug), "started"]
+    assert calls == ([('activate_fake',123)] if backend=='foreground' else [])+[(direction,0 if mode=='all' else 37,debug,backend),'started']
     assert window.stage == "capturing"
     window.hide()
+
+
+def test_background_countdown_ignores_escape_in_other_software(app,tmp_path):
+    def forbidden():raise AssertionError('Global escape must not be read')
+    window=CaptureWindow(SimpleNamespace(escape_pressed=forbidden),tmp_path)
+    assert window.backend.currentData()=='background'
+    window.target=target();window.begin_countdown();window.countdown_tick()
+    assert window.stage=='countdown'
+    assert window.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+    window.cancel();window.hide()
+
+
+def test_background_calibration_uses_window_source_and_never_activates_target(app,tmp_path,monkeypatch):
+    from welog import gui,background
+    calls=[]
+    def forbidden(*args):raise AssertionError('Target must not be activated')
+    desktop=SimpleNamespace(activate=forbidden,describe_window=lambda _:target(),escape_pressed=forbidden)
+    class Source:
+        def __init__(self,*args):calls.append('window_source')
+        def read(self):return np.full((720,640,3),245,np.uint8)
+        def close(self):calls.append('closed')
+    def factory(backend):
+        assert backend=='background'
+        return Source
+    class Dialog:
+        DialogCode=SimpleNamespace(Accepted=1)
+        roi=Rect(50,60,500,500);guard=Rect(100,0,100,40)
+        def __init__(self,*args):pass
+        def setAttribute(self,attribute,value):assert attribute==Qt.WidgetAttribute.WA_ShowWithoutActivating and value
+        def exec(self):return 1
+    monkeypatch.setattr(background,'source_factory',factory)
+    monkeypatch.setattr(gui,'RegionDialog',Dialog)
+    window=CaptureWindow(desktop,tmp_path);window.target=target();window.stage='calibrating'
+    window.calibrate()
+    assert calls==['window_source','closed'] and window.stage=='countdown'
+    window.cancel();window.hide()

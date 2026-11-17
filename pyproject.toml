@@ -7,10 +7,10 @@ name = "welog"
 version = "0.1.0"
 description = "Local visual chat capture with overlap-corrected scroll coordinates"
 requires-python = ">=3.11"
-dependencies = ["numpy>=1.26,<3", "opencv-python-headless>=4.8,<5"]
+dependencies = ["numpy>=1.26,<3", "opencv-python-headless>=4.8,<5; platform_system != 'Windows'", "opencv-python-headless==4.14.0.94; platform_system == 'Windows'"]
 
 [project.optional-dependencies]
-windows = ["dxcam>=0.3,<0.4; platform_system == 'Windows'"]
+windows = ["dxcam>=0.3,<0.4; platform_system == 'Windows'", "windows-capture==2.0.1; platform_system == 'Windows'", "opencv-python==4.14.0.94; platform_system == 'Windows'"]
 gui = ["PySide6-Essentials>=6.8,<6.9"]
 ocr = ["rapidocr>=3.10,<4", "onnxruntime>=1.20,<2"]
 dev = ["pytest>=8,<10"]

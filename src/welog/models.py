@@ -120,6 +120,7 @@ class CaptureConfig:
     boundary_wait_s: float = 1.0
     debug_save_images: bool = False
     debug_max_bytes: int = 1024 * 1024 * 1024
+    capture_backend: str = 'foreground'
 
     def __post_init__(self) -> None:
         if self.direction not in {"up", "down"}:
@@ -145,3 +146,4 @@ class CaptureConfig:
         if not 0 <= self.boundary_wait_s <= 30:
             raise ValueError("boundary_wait_s must be between 0 and 30 seconds")
         if self.debug_max_bytes<=0:raise ValueError('debug_max_bytes must be positive')
+        if self.capture_backend not in {'foreground','background'}:raise ValueError('Invalid capture backend')

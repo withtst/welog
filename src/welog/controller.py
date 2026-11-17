@@ -181,6 +181,7 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
                          'diagnostic_image_save_error':diagnostic_save_error,
                          'capture_mode':'until_boundary' if config.max_frames==0 else 'limited',
                          'capture_direction':config.direction,'timeline_order':'oldest_first',
+                         'capture_backend':config.capture_backend,
                          'boundary_reached':status in {'boundary_reached','visible_end_candidate'},
                          'boundary':('top' if config.direction=='up' else 'bottom') if status in {'boundary_reached','visible_end_candidate'} else None}
                 if worker:

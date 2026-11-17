@@ -19,6 +19,16 @@ def test_gui_command_dispatches_to_gui_instead_of_silently_returning(monkeypatch
 def test_capture_cli_accepts_explicit_historical_direction():
     args = make_parser().parse_args(["capture", "--direction", "up", "--output", "unused"])
     assert args.direction == "up"
+    assert args.backend=='background'
+
+
+def test_background_activate_conflict_is_rejected_before_window_access(monkeypatch):
+    import pytest
+    from welog import cli,windows
+    def forbidden():raise AssertionError('Invalid options must not query desktop windows')
+    monkeypatch.setattr(windows,'WindowsDesktop',forbidden)
+    args=make_parser().parse_args(['capture','--roi','0,0,320,240','--output','unused','--activate'])
+    with pytest.raises(ValueError,match='incompatible'):cli.capture(args)
 
 
 def test_debug_retention_is_explicit_and_quota_is_configurable():

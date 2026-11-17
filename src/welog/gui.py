@@ -275,12 +275,13 @@ class CaptureWorker(QThread):
             if self.cancel_event.is_set():
                 self.result_ready.emit({"status": "stopped", "reason": "user_interrupt", "accepted": 0})
                 return
-            from .windows import DXcamSource, WindowsDesktop
+            from .windows import WindowsDesktop
+            from .background import source_factory
             desktop = (self.desktop_factory or WindowsDesktop)()
             current = desktop.describe_window(self.target.hwnd)
             if current != self.target:
                 raise RuntimeError("锁定的窗口已发生变化，请重新选择窗口。")
-            source = (self.source_factory or DXcamSource)(desktop, self.target.hwnd, self.roi, self.guard)
+            source = (self.source_factory or source_factory(self.config.capture_backend))(desktop, self.target.hwnd, self.roi, self.guard)
             result = run_capture(
                 source, str(self.output / "capture"), config=self.config,
                 metadata={"selection": "pointer_hover", "target": asdict(self.target),
@@ -411,6 +412,15 @@ class CaptureWindow(QMainWindow):
         row.addWidget(self.frame_limit)
         row.addStretch()
         content.addLayout(row)
+        backend_row=QHBoxLayout()
+        backend_row.addWidget(label('采集方式','muted'))
+        self.backend=QComboBox()
+        self.backend.addItem('后台窗口采集（不占用鼠标）','background')
+        self.backend.addItem('前台兼容采集','foreground')
+        backend_row.addWidget(self.backend)
+        backend_row.addStretch()
+        content.addLayout(backend_row)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating,True)
         self.start_hint=label('', 'muted')
         self.start_hint.setWordWrap(True)
         content.addWidget(self.start_hint)
@@ -562,13 +572,13 @@ class CaptureWindow(QMainWindow):
     def calibrate(self) -> None:
         if self.stage != "calibrating" or self.target is None:
             return
-        from .windows import DXcamSource
+        from .background import source_factory
         source = None
         try:
             if self.desktop.describe_window(self.target.hwnd) != self.target:
                 raise RuntimeError("窗口位置或内容发生变化，请重新选择。")
-            self.desktop.activate(self.target.hwnd)
-            source = DXcamSource(self.desktop, self.target.hwnd,
+            if self.backend.currentData()=='foreground':self.desktop.activate(self.target.hwnd)
+            source = source_factory(self.backend.currentData())(self.desktop, self.target.hwnd,
                                  Rect(0, 0, self.target.client.width, self.target.client.height))
             image = None
             deadline = time.monotonic() + 3
@@ -581,6 +591,7 @@ class CaptureWindow(QMainWindow):
             source.close()
             source = None
             dialog = RegionDialog(self.target, image)
+            if self.backend.currentData()=='background':dialog.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating,True)
             if dialog.exec() != QDialog.DialogCode.Accepted or dialog.roi is None:
                 self.selection_cancelled()
                 return
@@ -603,14 +614,15 @@ class CaptureWindow(QMainWindow):
         self.stage = "countdown"
         self.remaining = self.countdown_seconds
         self.countdown_deadline = time.monotonic() + self.countdown_seconds
-        self.status.setText(f"已锁定：{self.target.title}\n{self.capture_storage_label()}\n{self.remaining} 秒后开始。请保持聊天布局不变，Esc 停止。")
+        stop_hint='点击停止按钮结束' if self.backend.currentData()=='background' else 'Esc 停止'
+        self.status.setText(f"已锁定：{self.target.title}\n{self.capture_storage_label()}\n{self.remaining} 秒后开始，{stop_hint}。")
         self.show()
         self.countdown_timer.start()
 
     def countdown_tick(self) -> None:
         if self.stage != "countdown":
             return
-        if self.desktop.escape_pressed():
+        if self.backend.currentData()=='foreground' and self.desktop.escape_pressed():
             self.cancel()
             return
         self.remaining = max(0, math.ceil(self.countdown_deadline - time.monotonic()))
@@ -618,7 +630,7 @@ class CaptureWindow(QMainWindow):
             self.countdown_timer.stop()
             self.start_capture()
         else:
-            self.status.setText(f"已锁定：{self.target.title}\n{self.capture_storage_label()}\n{self.remaining} 秒后开始，Esc 取消。")
+            self.status.setText(f"已锁定：{self.target.title}\n{self.capture_storage_label()}\n{self.remaining} 秒后开始，可点击取消。")
 
     def start_capture(self) -> None:
         if self.target is None or self.roi is None or self.stage != "countdown":
@@ -635,13 +647,17 @@ class CaptureWindow(QMainWindow):
                 "capture_direction": self.direction.currentData(),
                 "capture_mode":self.capture_mode.currentData(),
                 "debug_save_images":self.debug_images.isChecked(),
+                "capture_backend":self.backend.currentData(),
             })
             self.stage = "capturing"
-            self.hide()
-            self.desktop.activate(self.target.hwnd)
+            if self.backend.currentData()=='foreground':
+                self.hide()
+                self.desktop.activate(self.target.hwnd)
+            self.backend.setEnabled(False)
             self.worker = CaptureWorker(self.target, self.roi, self.guard, output,
                                         CaptureConfig(max_frames=0 if self.capture_mode.currentData()=='all' else self.frame_limit.value(),
-                                                      direction=self.direction.currentData(),debug_save_images=self.debug_images.isChecked()))
+                                                      direction=self.direction.currentData(),debug_save_images=self.debug_images.isChecked(),
+                                                      capture_backend=self.backend.currentData()))
             logger.info("gui_capture_start direction=%s debug_save_images=%s output=%s", self.direction.currentData(), self.debug_images.isChecked(), output)
             self.worker.progress.connect(self.capture_progress, Qt.ConnectionType.QueuedConnection)
             self.worker.result_ready.connect(self.capture_finished, Qt.ConnectionType.QueuedConnection)
@@ -653,7 +669,8 @@ class CaptureWindow(QMainWindow):
             self.fail(str(error))
 
     def capture_progress(self, record: dict) -> None:
-        self.status.setText(f"已处理 {int(record['frame_id'])+1} 帧 · 累计位移 {record['scroll_offset_px']} px\nEsc 停止")
+        stop_hint='点击停止按钮结束' if self.backend.currentData()=='background' else 'Esc 停止'
+        self.status.setText(f"已处理 {int(record['frame_id'])+1} 帧 · 累计位移 {record['scroll_offset_px']} px\n{stop_hint}")
 
     def capture_finished(self, result: dict) -> None:
         self.stage = "idle"
@@ -667,11 +684,18 @@ class CaptureWindow(QMainWindow):
         if detail == "no_scroll_motion":
             detail = ("启动后未检测到滚动。可能已在所选方向的边界，或聊天区未响应滚轮。\n"
                       "采集历史请从最底部选择“底部 → 顶部”；也可重新框选聊天区后重试。")
+            if result.get('capture_backend',self.backend.currentData())=='background':
+                detail+='\n当前微信版本可能未响应后台滚动，已暂停；可自行选择前台兼容采集。'
         elif detail.startswith("StableTimeout"):
             detail = "画面布局仍未稳定或静态内容不足。"+('已保留调试截图。' if result.get('debug_image_count') else '已记录诊断元数据，没有保存截图。')
         elif detail=='continuity_unconfirmed':
             detail="无法确认跨页连续性，已原位停止。"
         elif detail=='DebugImageLimit':detail='调试截图达到存储上限，已停止。'
+        elif detail=='BackgroundFrameStale':detail='窗口停止提供新画面，已暂停；未抢夺焦点。'
+        elif detail=='BackgroundCaptureUnavailable':detail='窗口采集不可用，已暂停；未切换到前台采集。'
+        elif detail=='BackgroundTargetUnavailable':detail='目标窗口已隐藏、关闭或最小化，采集暂停。'
+        elif detail=='BackgroundTargetChanged':detail='窗口布局、聊天控件或会话校验发生变化，请重新校准。'
+        elif detail=='BackgroundScrollRejected':detail='后台滚动消息被系统拒绝，已暂停；未使用全局输入。'
         if result.get('debug_save_images'):
             detail+=f"\n调试截图：{result.get('debug_image_count',0)} 张 · {Path(result['output'])/'frames'}"
         if result.get("replay_excluded", 0):
@@ -689,6 +713,7 @@ class CaptureWindow(QMainWindow):
         self.pick_button.setEnabled(self.stage == "idle")
 
     def restore_controls(self) -> None:
+        self.backend.setEnabled(True)
         self.cancel_button.setEnabled(False)
         self.pick_button.setEnabled(self.worker is None or not self.worker.isRunning())
         self.show()

@@ -18,6 +18,10 @@ from .picker import WindowTarget
 class DesktopError(RuntimeError):
     pass
 
+class BackgroundTargetUnavailable(DesktopError):pass
+class BackgroundTargetChanged(DesktopError):pass
+class BackgroundScrollRejected(DesktopError):pass
+
 
 class WindowsDesktop:
     def __init__(self) -> None:
@@ -228,6 +232,71 @@ class WindowsDesktop:
         self.api.SendInput.restype = wintypes.UINT
         if self.api.SendInput(1, ctypes.byref(event), ctypes.sizeof(Input)) != 1:
             raise DesktopError("Mouse wheel input was rejected by Windows")
+
+    def check_background(self, target: WindowTarget) -> Rect:
+        """Identity/layout checks only: no focus, cursor, hit-testing or global Escape."""
+        if not self.api.IsWindow(target.hwnd) or not self.api.IsWindowVisible(target.hwnd) or self.api.IsIconic(target.hwnd):
+            raise BackgroundTargetUnavailable('Background target is missing, hidden or minimized')
+        pid=wintypes.DWORD()
+        self.api.GetWindowThreadProcessId(target.hwnd,ctypes.byref(pid))
+        if pid.value!=target.pid or self.title(target.hwnd)!=target.title:
+            raise BackgroundTargetChanged('Background window identity changed')
+        client=self.client_rect(target.hwnd)
+        if client!=target.client:raise BackgroundTargetChanged('Background window geometry or DPI changed; recalibrate')
+        return client
+
+    def capture_bounds(self, hwnd: int) -> Rect:
+        api=ctypes.WinDLL('dwmapi',use_last_error=True)
+        api.DwmGetWindowAttribute.argtypes=[wintypes.HWND,wintypes.DWORD,ctypes.c_void_p,wintypes.DWORD]
+        api.DwmGetWindowAttribute.restype=ctypes.c_long
+        rect=wintypes.RECT()
+        if api.DwmGetWindowAttribute(hwnd,9,ctypes.byref(rect),ctypes.sizeof(rect))!=0:
+            raise DesktopError('Cannot query captured window bounds')
+        return Rect(rect.left,rect.top,rect.right-rect.left,rect.bottom-rect.top)
+
+    def background_scroll_target(self, target: WindowTarget, roi: Rect) -> int:
+        """Descend only the selected window's child tree, independently of occlusion."""
+        self.check_background(target)
+        api=self.api
+        api.ChildWindowFromPointEx.argtypes=[wintypes.HWND,wintypes.POINT,wintypes.UINT]
+        api.ChildWindowFromPointEx.restype=wintypes.HWND
+        api.ScreenToClient.argtypes=[wintypes.HWND,ctypes.POINTER(wintypes.POINT)]
+        api.ScreenToClient.restype=wintypes.BOOL
+        x=target.client.x+roi.x+roi.width//2;y=target.client.y+roi.y+roi.height//2
+        parent=target.hwnd
+        for _ in range(32):
+            point=wintypes.POINT(x,y)
+            if not api.ScreenToClient(parent,ctypes.byref(point)):raise DesktopError('Cannot locate background chat control')
+            child=api.ChildWindowFromPointEx(parent,point,7)
+            if not child or int(child)==parent:return parent
+            pid=wintypes.DWORD();api.GetWindowThreadProcessId(child,ctypes.byref(pid))
+            if pid.value!=target.pid:raise DesktopError('Background child belongs to another process')
+            parent=int(child)
+        raise DesktopError('Background child hierarchy is too deep')
+
+    def post_background_scroll(self, target: WindowTarget, child: int, roi: Rect, units: int) -> None:
+        self.check_background(target)
+        api=self.api
+        api.IsChild.argtypes=[wintypes.HWND,wintypes.HWND];api.IsChild.restype=wintypes.BOOL
+        if not api.IsWindow(child) or not api.IsWindowVisible(child) or (child!=target.hwnd and not api.IsChild(target.hwnd,child)):
+            raise BackgroundTargetChanged('Background chat control was replaced or hidden')
+        pid=wintypes.DWORD();api.GetWindowThreadProcessId(child,ctypes.byref(pid))
+        if pid.value!=target.pid:raise BackgroundTargetChanged('Background chat control identity changed')
+        api.PostMessageW.argtypes=[wintypes.HWND,wintypes.UINT,wintypes.WPARAM,wintypes.LPARAM]
+        api.PostMessageW.restype=wintypes.BOOL
+        x=target.client.x+roi.x+roi.width//2;y=target.client.y+roi.y+roi.height//2
+        if not -32768<=x<=32767 or not -32768<=y<=32767:raise DesktopError('Wheel coordinates exceed Win32 range')
+        # Public units are positive DOWN; Win32 wheel delta is positive UP.
+        wheel=((-units)&0xffff)<<16;point=(x&0xffff)|((y&0xffff)<<16)
+        if not api.PostMessageW(child,0x020A,wheel,point):raise BackgroundScrollRejected('Background scroll message rejected')
+
+    def refresh_background(self, target: WindowTarget) -> None:
+        self.check_background(target)
+        self.api.RedrawWindow.argtypes=[wintypes.HWND,ctypes.c_void_p,ctypes.c_void_p,wintypes.UINT]
+        self.api.RedrawWindow.restype=wintypes.BOOL
+        # Asynchronous invalidation of this window and its children only; no activation.
+        if not self.api.RedrawWindow(target.hwnd,None,None,0x0001|0x0080):
+            raise DesktopError('Background window repaint request failed')
 
 
 class DXcamSource:

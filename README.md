@@ -18,19 +18,31 @@ python -m venv .venv
 
 也可运行 `.venv\Scripts\python.exe -m welog gui --no-auto-pick`。复现实测版本：先安装 `requirements.lock`，再 `pip install -e . --no-deps`。OCR 使用 CPU ONNX Runtime、PP-OCRv6 small，已验证模型直接接受 numpy BGR 数组，不使用临时图片。
 
-现在仅安装 headless OpenCV，交互框选由 PySide6 完成；不要混装 opencv-python 与 opencv-python-headless。
+交互框选由 PySide6 完成，不调用 OpenCV 的窗口 API。Windows 的 WGC 依赖 `windows-capture==2.0.1`，其依赖声明使用 `opencv-python`，RapidOCR 则使用 `opencv-python-headless`；Windows extra 和锁定文件将两个发行版固定为同一版本。升级已有环境时按 `requirements.lock` 安装，不单独卸载其中一个共享 `cv2` 的发行版；需要修复环境时重新安装锁定依赖。非 Windows 环境仅使用 headless 发行版。
 
 ## 用户交互
 
-1. 打开程序，光标移到主显示器上可见的微信主窗口内，停留约 1.5 秒锁定。
+1. 打开程序，光标移到可见的微信主窗口内，停留约 1.5 秒锁定。默认使用“后台窗口采集”，锁定后可以用其他窗口遮住微信。
 2. 首次在内存截图上框选可滚动消息区，排除标题、输入框和滚动条；可再框选固定会话名称。
 3. GUI 默认“完整采集”，不受帧数上限限制。选择“底部 → 顶部”前先定位到最底部；选择“顶部 → 底部”前，用户需自行切换到最早一条聊天记录。程序从当前位置开始，不替用户寻找起点。
-4. 倒计时后开始；Esc 取消或停止。不会切换联系人或发送消息。
-5. 结束后自动打开“记录与导出”，也可点击“查看本次记录”。窗口失焦、布局变化或跨页连续性不能确认时停止。
+4. 倒计时后开始；后台采集保留本程序的停止按钮，不响应其他软件中的全局 Esc。在本程序内按 Esc 仍可停止；前台兼容模式也保留全局 Esc。不会切换联系人或发送聊天消息。
+5. 结束后自动打开“记录与导出”，也可点击“查看本次记录”。窗口关闭/最小化、布局或会话变化、画面过期、跨页连续性不能确认时暂停。后台模式不因切换到其他软件或被遮挡而停止。
 
 完整模式在有实际滚动后，连续三次确认无位移时停止；候选边界处会等待再次尝试，允许客户端继续加载。若滚动恢复则继续采集。只想试采几屏时可切换“限量采集”并设置帧数。相同尺寸可复用校准；字体、主题或布局变化后需重新框选。
 
 **两种采集方向都按从早到晚显示和导出。** 消息按全局纵坐标升序排列，向上采集的负坐标不会导致时间线反转；同一长消息内部的文字行也保持从上到下。这里遍历的是用户选定起点到客户端当前可滚动边界的内容；未检测到任何滚动、连续性失败、用户停止和达到限量帧数都不会标记为完整遍历。
+
+## 后台窗口采集
+
+默认采用 Windows Graphics Capture 按精确 HWND 取图，裁剪到已校准的客户区 ROI；允许窗口未最小化且被其他软件遮挡。取图不包含鼠标，不依赖当前屏幕可见内容。校准和采集都不会主动激活微信；本程序的结果窗口也以不激活方式显示。
+
+后台滚动仅向锁定窗口树中选定的聊天子控件发送 `WM_MOUSEWHEEL`，不调用 `SetCursorPos`、`SendInput` 或 `SetForegroundWindow`，不会随鼠标位置选择其他软件。它不自动切换到前台兼容模式。
+
+当前实现使用定向窗口消息，尚未实现 UIA ScrollPattern 路径。不同微信版本对后台滚动的响应需要用户主动验证；消息投递成功不能证明已滚动，程序仍以实际图像位移为准。未产生位移会暂停提示，用户可主动选择“前台兼容采集”。校准会话标题区域有助于发现误切换会话，采集中应保持目标窗口的位置、尺寸、DPI 及会话不变。
+
+最小化、隐藏、关闭、窗口身份或控件变化、WGC 不可用/返回黑屏、标题校验变化、失去新画面时停止；不会恢复、置顶或激活目标窗口。后台只缓存一对 ROI/标题图像，覆盖旧帧，不积压历史截图。超过 0.5 秒的缓存不作为稳定帧，定向请求目标重绘；超过 2 秒没有新帧则暂停，避免把冻结画面当作滚动边界。
+
+详细设计和验证见 [后台采集](docs/background-capture.md)。
 
 ## 调试采集
 
@@ -143,12 +155,12 @@ OCR 后处理会删除带数字的“x条新消息”提示：混入正文时只
 ```powershell
 .\.venv\Scripts\python.exe -m welog windows
 .\.venv\Scripts\python.exe -m welog configure --hwnd 123456 --output configs/wechat.json --with-guard
-.\.venv\Scripts\python.exe -m welog capture --config configs/wechat.json --output runs/chat-new --direction up
+.\.venv\Scripts\python.exe -m welog capture --config configs/wechat.json --output runs/chat-new --direction up --backend background
 # 用户先手动定位到最早一条记录，再从顶部向下采集：
 .\.venv\Scripts\python.exe -m welog capture --config configs/wechat.json --output runs/chat-down --direction down
 ```
 
-句柄 123456 需替换为实际值。GUI 与 capture CLI 的 `--max-frames` 默认 0，表示采集到边界；指定正数启用限量采集。ROI 为相对窗口客户区的原生物理像素 x,y,width,height。`--wheel-units` 是单事件输入，默认 120；程序分隔发送多个事件，按实测位移规划批次。窗口及目标仍要求位于主显示器，采集中不调整布局。
+句柄 123456 需替换为实际值。GUI 与 capture CLI 默认后台采集，可显式选择 `--backend foreground` 兼容旧方式；后台模式不允许 `--activate`。`--max-frames` 默认 0，表示采集到边界；指定正数启用限量采集。ROI 为相对窗口客户区的原生物理像素 x,y,width,height。`--wheel-units` 是单事件输入，默认 120；程序分隔发送多个事件，按实测位移规划批次。旧前台后端仍要求目标位于主显示器；后台后端按窗口句柄取图。
 
 累计坐标约定：`global_y = scroll_offset_px + viewport_y - origin_y_px`。向上为负，不是错误。`--origin-y` 默认 0；可手动指定首帧目标消息顶部。消息使用独立 UUID，不使用累计高度作永久身份。
 

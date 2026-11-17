@@ -63,9 +63,10 @@ def make_parser() -> argparse.ArgumentParser:
     _target_args(setup)
     setup.add_argument("--output", type=Path, required=True)
     setup.add_argument("--with-guard", action="store_true", help="Also select a non-scrolling conversation title region")
-    capture = commands.add_parser("capture", help="Capture and scroll one foreground window")
+    capture = commands.add_parser("capture", help="Capture and scroll a selected window")
     _target_args(capture)
     capture.add_argument("--config", type=Path)
+    capture.add_argument('--backend',choices=['background','foreground'],default='background')
     capture.add_argument("--roi", type=_rect)
     capture.add_argument("--guard-roi", type=_rect)
     capture.add_argument("--mask", type=_rect, action="append", help="Ignore viewport-relative dynamic regions")
@@ -144,7 +145,8 @@ def configure(args: argparse.Namespace) -> int:
 
 
 def capture(args: argparse.Namespace) -> int:
-    from .windows import DXcamSource, WindowsDesktop
+    from .windows import WindowsDesktop
+    from .background import source_factory
 
     saved = json.loads(args.config.read_text(encoding="utf-8")) if args.config else {}
     roi = args.roi or (Rect(**saved["roi"]) if "roi" in saved else None)
@@ -155,18 +157,20 @@ def capture(args: argparse.Namespace) -> int:
         raise ValueError("countdown cannot be negative")
     config = CaptureConfig(max_frames=args.max_frames, initial_wheel_units=args.wheel_units,
                            origin_y_px=args.origin_y, direction=args.direction,
-                           debug_save_images=args.debug_save_images,debug_max_bytes=args.debug_max_mb*1024*1024)
+                           debug_save_images=args.debug_save_images,debug_max_bytes=args.debug_max_mb*1024*1024,
+                           capture_backend=args.backend)
     alignment = _alignment(args, saved.get("alignment_config"))
+    if args.activate and args.backend=='background':raise ValueError('--activate is incompatible with background capture')
     desktop = WindowsDesktop()
     hwnd = desktop.resolve(args.hwnd, args.title or saved.get("title"))
     if args.activate:
         desktop.activate(hwnd)
-    print(f"Focus the selected chat. Starting in {args.countdown:g}s. Esc or Ctrl+C stops capture.", flush=True)
+    print(f"Starting {args.backend} capture in {args.countdown:g}s. Ctrl+C stops capture.", flush=True)
     time.sleep(args.countdown)
     client = desktop.client_rect(hwnd)
     if saved.get("client_size") and saved["client_size"] != [client.width, client.height]:
         raise ValueError("Window size differs from calibration; run configure again")
-    source = DXcamSource(desktop, hwnd, roi, guard)
+    source = source_factory(args.backend)(desktop, hwnd, roi, guard)
     report = run_capture(source, str(args.output), config=config, alignment=alignment,
                          metadata={"hwnd": hwnd, "window_title": desktop.title(hwnd), "roi": roi.to_dict(),
                                    "guard_roi": guard.to_dict() if guard else None, "client_rect": client.to_dict()},
