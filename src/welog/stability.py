@@ -6,6 +6,7 @@ from collections import deque
 from dataclasses import asdict, dataclass, field, replace
 
 import numpy as np
+import cv2
 
 from .alignment import OverlapAligner
 from .imageio import gray
@@ -20,25 +21,33 @@ class StabilityResult:
     dynamic_region_ratio: float = 0.0
     static_matches: int = 0
     dynamic_masks: list[Rect] = field(default_factory=list)
+    media_supported_ratio: float = 0.0
+    static_method: str = 'templates'
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
 class LayoutStabilityDetector:
-    def __init__(self, alignment: AlignmentConfig, samples: int = 3, max_dynamic_ratio: float = 0.12):
+    def __init__(self, alignment: AlignmentConfig, samples: int = 3, max_dynamic_ratio: float = 0.12,max_media_dynamic_ratio: float = .5):
         if samples < 2 or not 0 <= max_dynamic_ratio <= 0.2:
             raise ValueError("Invalid temporal stability window or animation budget")
         self.alignment = alignment
         self.samples = samples
         self.max_dynamic_ratio = max_dynamic_ratio
+        if not max_dynamic_ratio<=max_media_dynamic_ratio<=.6:raise ValueError('Invalid media animation budget')
+        self.max_media_dynamic_ratio=max_media_dynamic_ratio
         self.history: deque[np.ndarray] = deque(maxlen=samples)
+        self.media_history=deque(maxlen=samples)
 
     def observe(self, image: np.ndarray) -> StabilityResult:
         current = gray(image).copy()
         if self.history and self.history[-1].shape != current.shape:
             self.history.clear()
+            self.media_history.clear()
         self.history.append(current)
+        from .recognition import detect_bubbles
+        self.media_history.append([b.box for b in detect_bubbles(image) if b.kind=='image'] if image.ndim==3 else [])
         if len(self.history) < self.samples:
             return StabilityResult(False, "collecting_samples", len(self.history))
         reference = self.history[0]
@@ -75,11 +84,26 @@ class LayoutStabilityDetector:
                     run_start = None
         ratio = area / int(valid.sum())
         result = StabilityResult(False, "widespread_motion", len(self.history), ratio, dynamic_masks=masks)
-        if ratio > self.max_dynamic_ratio:
-            return result
+        media_aware=ratio>self.max_dynamic_ratio
+        media_boxes=[]
+        if media_aware:
+            if ratio>self.max_media_dynamic_ratio:return result
+            # Larger masks require actual media-shaped regions, not arbitrary moving text.
+            # Store only boxes; the rolling grayscale history remains bounded.
+            supported=np.zeros(reference.shape,dtype=bool)
+            for boxes in self.media_history:
+                for x1,y1,x2,y2 in boxes:supported[max(0,y1):y2,max(0,x1):x2]=True
+                media_boxes.extend(Rect(x1,y1,x2-x1,y2-y1) for x1,y1,x2,y2 in boxes)
+            changed_count=int(changed.sum())
+            outside=int((changed&~supported).sum())
+            result.media_supported_ratio=1-outside/max(1,changed_count)
+            if outside>64 or result.media_supported_ratio<.98:
+                result.reason='motion_outside_media';return result
         # First check without new masks. A coherent nonzero translation must never
         # be reclassified as a local animation, even when only sparse text moves.
-        raw_aligner = OverlapAligner(self.alignment)
+        # A panning GIF can itself have coherent motion. For the larger, media-
+        # supported policy, test page motion outside media instead of treating it as page motion.
+        raw_aligner = OverlapAligner(replace(self.alignment,masks=self.alignment.masks+tuple(media_boxes))) if media_aware else OverlapAligner(self.alignment)
         for item in list(self.history)[1:]:
             movement = raw_aligner.estimate(reference, item, direction="both")
             if movement.accepted and movement.delta_px != 0:
@@ -90,10 +114,29 @@ class LayoutStabilityDetector:
         for item in list(self.history)[1:]:
             stationary = aligner.estimate(reference, item, direction="both")
             if not stationary.accepted or stationary.delta_px != 0:
-                result.reason = "stationary_content_unconfirmed"
-                return result
-            inliers.append(stationary.inliers)
+                count=self._static_features(reference,item,aligner) if media_aware else 0
+                if not count:
+                    result.reason = "stationary_content_unconfirmed";return result
+                result.static_method='static_features'
+                inliers.append(count)
+            else:inliers.append(stationary.inliers)
         result.stable = True
-        result.reason = "local_animation" if masks else "minor_pixel_noise"
+        result.reason = 'multiple_media_animation' if media_aware else "local_animation" if masks else "minor_pixel_noise"
         result.static_matches = min(inliers)
         return result
+
+    @staticmethod
+    def _static_features(previous,current,aligner):
+        valid=aligner._valid_mask(previous.shape)
+        detector=cv2.SIFT_create(nfeatures=1500)
+        a,da=detector.detectAndCompute(previous,valid.astype(np.uint8)*255)
+        b,db=detector.detectAndCompute(current,valid.astype(np.uint8)*255)
+        if da is None or db is None or len(a)<12 or len(b)<12:return 0
+        matches=[pair[0] for pair in cv2.BFMatcher().knnMatch(da,db,k=2) if len(pair)==2 and pair[0].distance<pair[1].distance*.7]
+        if len(matches)<12:return 0
+        src=np.float32([a[m.queryIdx].pt for m in matches]);dst=np.float32([b[m.trainIdx].pt for m in matches])
+        stationary=np.max(np.abs(dst-src),axis=1)<.25
+        if stationary.sum()<12 or stationary.mean()<.8:return 0
+        if np.max(np.ptp(src[stationary],axis=0))<48:return 0
+        error,coverage=aligner._validate(previous,current,0,valid)
+        return int(stationary.sum()) if error<=aligner.config.max_validation_error and coverage>=aligner.config.min_validation_coverage else 0

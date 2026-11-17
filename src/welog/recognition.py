@@ -103,7 +103,8 @@ def detect_bubbles(bgr: np.ndarray) -> list[Bubble]:
     contours,_ = cv2.findContours(foreground,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
     for contour in contours:
         x,y,bw,bh=cv2.boundingRect(contour)
-        if bw<45 or bh<35 or x<w*.035 or x+bw>w*.97:
+        clipped=y<=1 or y+bh>=h-1
+        if bw<45 or bh<8 or (bh<35 and not clipped) or x<w*.035 or x+bw>w*.97:
             continue
         if not (x<w*.25 or x+bw>w*.75):
             continue

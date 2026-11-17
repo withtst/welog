@@ -658,7 +658,7 @@ class CaptureWindow(QMainWindow):
                                         CaptureConfig(max_frames=0 if self.capture_mode.currentData()=='all' else self.frame_limit.value(),
                                                       direction=self.direction.currentData(),debug_save_images=self.debug_images.isChecked(),
                                                       capture_backend=self.backend.currentData()))
-            logger.info("gui_capture_start direction=%s debug_save_images=%s output=%s", self.direction.currentData(), self.debug_images.isChecked(), output)
+            logger.info("gui_capture_start direction=%s backend=%s debug_save_images=%s output=%s", self.direction.currentData(), self.backend.currentData(), self.debug_images.isChecked(), output)
             self.worker.progress.connect(self.capture_progress, Qt.ConnectionType.QueuedConnection)
             self.worker.result_ready.connect(self.capture_finished, Qt.ConnectionType.QueuedConnection)
             self.worker.failed.connect(self.fail, Qt.ConnectionType.QueuedConnection)

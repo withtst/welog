@@ -34,7 +34,7 @@ class StableTimeout(RuntimeError):
 def wait_for_stable(source,config,alignment,stop_requested=None,diagnostics=None,budget=None):
     deadline=time.monotonic()+config.stable_timeout_s
     latest=None;workspace=None;metrics={}
-    detector=LayoutStabilityDetector(alignment,config.stable_samples,config.stability_max_dynamic_ratio)
+    detector=LayoutStabilityDetector(alignment,config.stable_samples,config.stability_max_dynamic_ratio,config.stability_media_max_dynamic_ratio)
     try:
         while time.monotonic()<deadline:
             if stop_requested and stop_requested():raise KeyboardInterrupt
@@ -47,9 +47,12 @@ def wait_for_stable(source,config,alignment,stop_requested=None,diagnostics=None
                 if diagnostics is not None:diagnostics.clear();diagnostics.update(metrics)
                 if result.stable:return sample
             time.sleep(config.sample_interval_s)
+        logger.warning('stability_timeout reason=%s dynamic_ratio=%.4f media_support=%.4f static_matches=%s',
+                       metrics.get('reason'),metrics.get('dynamic_region_ratio',0),metrics.get('media_supported_ratio',0),metrics.get('static_matches',0))
         raise StableTimeout(latest,metrics)
     finally:
         detector.history.clear()
+        detector.media_history.clear()
         if workspace:workspace.release()
 
 
@@ -117,7 +120,7 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
             session=DebugSession(output,session_metadata,config.debug_max_bytes)
         else:session=MemorySession(output,session_metadata)
         worker=OcrWorker(session.path,budget,ocr_backend or RapidOcrAdapter(),alignment,config)
-        logger.info('memory_capture_start direction=%s debug_save_images=%s output=%s',config.direction,config.debug_save_images,session.path)
+        logger.info('memory_capture_start direction=%s backend=%s debug_save_images=%s output=%s',config.direction,config.capture_backend,config.debug_save_images,session.path)
         attempt({'kind':'initial'})
         while has_capacity():
             if config.max_frames==0 and stationary:wait_at_boundary()
