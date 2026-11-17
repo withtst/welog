@@ -98,6 +98,7 @@ class AlignmentResult:
     feature_matches_overlap: int | None = None
     feature_inlier_ratio: float | None = None
     feature_rejection_reason: str | None = None
+    edge_rejection_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

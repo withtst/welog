@@ -70,7 +70,7 @@ class EmptyOcr:
         return []
 
 
-def detect_bubbles(bgr: np.ndarray) -> list[Bubble]:
+def detect_bubbles(bgr: np.ndarray, *, include_small_edge_media: bool = False) -> list[Bubble]:
     """Light-theme private-chat baseline. Keep long and viewport-clipped bodies."""
     h, w = bgr.shape[:2]
     values = bgr.astype(np.int16)
@@ -104,7 +104,8 @@ def detect_bubbles(bgr: np.ndarray) -> list[Bubble]:
     for contour in contours:
         x,y,bw,bh=cv2.boundingRect(contour)
         clipped=y<=1 or y+bh>=h-1
-        if bw<45 or bh<8 or (bh<35 and not clipped) or x<w*.035 or x+bw>w*.97:
+        edge_fragment=include_small_edge_media and clipped and bw>=8 and bh>=2 and bw*bh>=64
+        if ((bw<45 or bh<8 or (bh<35 and not clipped)) and not edge_fragment) or x<w*.035 or x+bw>w*.97:
             continue
         if not (x<w*.25 or x+bw>w*.75):
             continue
@@ -119,6 +120,35 @@ def detect_bubbles(bgr: np.ndarray) -> list[Bubble]:
         candidates=[b for b in candidates if not any(b is item for item in contained)]
         candidates.append(Bubble((x,y,x+bw,y+bh),"incoming" if x<w*.25 else "outgoing","image" if colorful>=.02 else "unknown",
                                  "clipped" if y<=1 else "visible","clipped" if y+bh>=h-1 else "visible"))
+    if include_small_edge_media:
+        # Detach the neutral viewport border without cutting a clipped sticker
+        # into separate eyes/hat/mouth regions. This pass is temporal-only.
+        interior=foreground.copy()
+        interior[:4]=0;interior[-4:]=0;interior[:,:4]=0;interior[:,-4:]=0
+        edge_contours,_=cv2.findContours(interior,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+        for contour in edge_contours:
+            x,y,bw,bh=cv2.boundingRect(contour)
+            if not (y<=4 or y+bh>=h-4) or bw<2 or bh<2 or bw*bh<64:continue
+            if x<w*.035 or x+bw>w*.97 or not (x<w*.25 or x+bw>w*.75):continue
+            patch=values[y:y+bh,x:x+bw]
+            if (patch.max(2)-patch.min(2)>35).mean()<.02:continue
+            if any(item.kind=='text' and item.box[0]<=x and item.box[2]>=x+bw and item.box[1]<=y and item.box[3]>=y+bh for item in candidates):continue
+            a,b,c,d=max(0,x-1),0 if y<=4 else y-1,min(w,x+bw+1),h if y+bh>=h-4 else y+bh+1
+            candidates.append(Bubble((a,b,c,d),'incoming' if x<w*.25 else 'outgoing','image',
+                'clipped' if y<=4 else 'visible','clipped' if y+bh>=h-4 else 'visible'))
+        # A clipped colored tail can connect to a full-window neutral border,
+        # making its foreground contour unusable. Inspect chroma separately.
+        chroma=(values.max(2)-values.min(2)>35).astype(np.uint8)
+        fragments,_=cv2.findContours(chroma,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+        for contour in fragments:
+            x,y,bw,bh=cv2.boundingRect(contour)
+            if not (y<=8 or y+bh>=h-8) or bw<2 or bh<2 or cv2.contourArea(contour)<32:continue
+            if x<w*.035 or x+bw>w*.97 or not (x<w*.25 or x+bw>w*.75):continue
+            a,b,c,d=max(0,x-3),max(0,y-3),min(w,x+bw+3),min(h,y+bh+3)
+            if any(item.kind=='text' and item.box[0]<=x and item.box[2]>=x+bw and item.box[1]<=y and item.box[3]>=y+bh for item in candidates):continue
+            if any(item.kind=='image' and item.box[0]<=a and item.box[1]<=b and item.box[2]>=c and item.box[3]>=d for item in candidates):continue
+            candidates.append(Bubble((a,b,c,d),'incoming' if x<w*.25 else 'outgoing','image',
+                'clipped' if y<=8 else 'visible','clipped' if y+bh>=h-8 else 'visible'))
     return sorted(candidates,key=lambda b:(b.box[1],b.box[0]))
 
 

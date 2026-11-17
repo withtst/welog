@@ -28,6 +28,7 @@ class CoordinateTracker:
         self.reference_id: str | None = None
         self.scroll_offset_px = 0.0
         self.reference_masks: tuple[Rect, ...] = ()
+        self.layout_regions=()
         self.feature_verifier=MotionTracker(ImageBudget(),aligner.config)
 
     def accept(self, image: np.ndarray, frame_id: str, *, direction: str = "down",
@@ -44,11 +45,19 @@ class CoordinateTracker:
                 new_valid=OverlapAligner(replace(self.aligner.config,masks=self.aligner.config.masks+dynamic_masks))._valid_mask(image.shape[:2])
                 feature=self.feature_verifier.features(gray(self.reference),gray(image),aligner._valid_mask(image.shape[:2]),aligner,direction,old_valid,new_valid)
                 if feature.accepted:result=feature
+                else:
+                    from .edge_layout import estimate_edge_layout,layout_media_regions,without_media
+                    edge=estimate_edge_layout(gray(self.reference),gray(image),without_media(old_valid,self.layout_regions),
+                        without_media(new_valid,layout_media_regions(image)),aligner,direction)
+                    if edge.accepted:result=edge
+                    else:result.edge_rejection_reason=edge.reason
         if result.accepted:
+            from .edge_layout import layout_media_regions
             self.scroll_offset_px += result.delta_px or 0.0
             self.reference = image.copy()
             self.reference_id = frame_id
             self.reference_masks = dynamic_masks
+            self.layout_regions=layout_media_regions(image)
         return result, previous_id
 
     def global_y(self, viewport_y: float) -> float:

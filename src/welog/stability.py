@@ -23,6 +23,7 @@ class StabilityResult:
     dynamic_masks: list[Rect] = field(default_factory=list)
     media_supported_ratio: float = 0.0
     static_method: str = 'templates'
+    outside_media_pixels: int = 0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -47,7 +48,7 @@ class LayoutStabilityDetector:
             self.media_history.clear()
         self.history.append(current)
         from .recognition import detect_bubbles
-        self.media_history.append([b.box for b in detect_bubbles(image) if b.kind=='image'] if image.ndim==3 else [])
+        self.media_history.append([b.box for b in detect_bubbles(image,include_small_edge_media=True) if b.kind=='image'] if image.ndim==3 else [])
         if len(self.history) < self.samples:
             return StabilityResult(False, "collecting_samples", len(self.history))
         reference = self.history[0]
@@ -92,6 +93,7 @@ class LayoutStabilityDetector:
             media_boxes.extend(Rect(x1,y1,x2-x1,y2-y1) for x1,y1,x2,y2 in boxes)
         changed_count=int(changed.sum())
         outside=int((changed&~supported).sum())
+        result.outside_media_pixels=outside
         result.media_supported_ratio=1-outside/changed_count if changed_count else 0.
         media_local=bool(changed_count and media_boxes and outside<=64 and result.media_supported_ratio>=.98)
         if media_aware:

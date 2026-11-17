@@ -17,6 +17,7 @@ class MotionTracker:
         self.budget,self.config=budget,config
         self.previous=None;self.lines=[];self.masks=()
         self.offset=0.;self.reference_id=None
+        self.layout_regions=()
 
     def accept(self,image,frame_id,lines,direction,masks=()):
         previous_id=self.reference_id
@@ -67,11 +68,18 @@ class MotionTracker:
                 else:
                     for key in ['feature_matches_total','feature_matches_overlap','feature_inlier_ratio','feature_rejection_reason']:
                         setattr(result,key,getattr(feature,key))
+                    from .edge_layout import estimate_edge_layout,layout_media_regions,without_media
+                    edge=estimate_edge_layout(old,current,without_media(old_valid,self.layout_regions),
+                        without_media(new_valid,layout_media_regions(image)),aligner,direction)
+                    if edge.accepted:result,method=edge,'edge_layout'
+                    else:result.edge_rejection_reason=edge.reason
         if result.accepted:
+            from .edge_layout import layout_media_regions
             replacement=self.budget.copy(gray(image))
             if self.previous:self.previous.release()
             self.previous=replacement;self.lines=list(lines);self.masks=tuple(masks)
             self.offset+=result.delta_px or 0.;self.reference_id=frame_id
+            self.layout_regions=layout_media_regions(image)
         return result,previous_id,method
 
     def allowed(self,delta,height,direction):
@@ -124,4 +132,4 @@ class MotionTracker:
 
     def close(self):
         if self.previous:self.previous.release();self.previous=None
-        self.lines=[];self.masks=()
+        self.lines=[];self.masks=();self.layout_regions=()
