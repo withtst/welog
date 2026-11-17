@@ -24,6 +24,23 @@ def audit(source):
         with journal.open(encoding='utf-8') as file:
             frames={row['frame_id']:row for row in map(json.loads,file)}
     rows=list(source.records())
+    retained={}
+    for name in ['frames.jsonl','retained_frames.jsonl']:
+        path=root/name
+        if path.exists():
+            for line in path.read_text(encoding='utf-8').splitlines():
+                frame=json.loads(line)
+                if frame.get('image'):retained[frame['frame_id']]=frame
+    crops={}
+    event_file=root/'diagnostics.jsonl'
+    if event_file.exists():
+        for line in event_file.read_text(encoding='utf-8').splitlines():
+            for image in json.loads(line).get('images',[]):
+                if image.get('role')=='unknown_crop' and image.get('message_id'):crops.setdefault(image['message_id'],[]).append(image)
+    def available(info):
+        if not info or not info.get('image'):return False
+        path=(root/info['image']).resolve()
+        return path.is_relative_to(root.resolve()) and path.is_file()
     targets=[row for row in rows if row['type'] in {'image','unknown'}]
     results=[]
     db=sqlite3.connect(source.path.as_uri()+'?mode=ro',uri=True)
@@ -44,6 +61,7 @@ def audit(source):
                     elif x1-25<=cx<=x2+25 and y1-35<=cy<=y2+35:near.append(label)
                 bubbles=[bubble for bubble in frame.get('observations',[]) if list(bubble['box'])==list(box)]
                 views.append({'frame_id':observation['frame_id'],'box':box,'coordinate_status':frame.get('coordinate_status'),
+                    'retained_image':retained.get(observation['frame_id']),
                     'bubble_ocr_lines':[line for bubble in bubbles for line in bubble.get('lines',[])],
                     'inside_labels':inside,'nearby_labels':near,'observation_found':bool(bubbles)})
             # A neighboring message is a lead to inspect, not evidence belonging to this message.
@@ -51,12 +69,14 @@ def audit(source):
                 'SELECT message_id,text,top,bottom,x1,x2 FROM lines WHERE message_id<>? AND bottom>? AND top<? AND x2>? AND x1<?',
                 (identity,message['top']-20,message['bottom']+20,message['x1']-20,message['x2']+20))]
             has_internal=bool(stored or any(view['bubble_ocr_lines'] or view['inside_labels'] for view in views))
+            image_crops=crops.get(identity,[])
+            has_pixels=any(available(view['retained_image']) for view in views) or any(available(crop) for crop in image_crops)
             results.append({'message_id':identity,'type':row['type'],'time_interval':interval_label(row),
                 'global_top_px':message['top'],'global_bottom_px':message['bottom'],
                 'width_px':message['x2']-message['x1'],'height_px':message['bottom']-message['top'],
-                'stored_lines':stored,'views':views,'neighboring_message_lines':foreign,
-                'verdict':'needs_text_review' if has_internal else 'insufficient_evidence',
-                'reason':'存在内部文字，需进一步核对' if has_internal else '没有内部 OCR 文字及原采集像素，不能由尺寸推断为文件'})
+                'stored_lines':stored,'views':views,'neighboring_message_lines':foreign,'retained_crops':image_crops,
+                'verdict':'needs_text_review' if has_internal else 'needs_visual_review' if has_pixels else 'insufficient_evidence',
+                'reason':'存在内部文字，需进一步核对' if has_internal else '保留了原图或裁剪，可结合像素复核' if has_pixels else '没有内部 OCR 文字及原采集像素，不能由尺寸推断为文件'})
     finally:db.close()
     frame_file=root/'frames.jsonl'
     image_refs=0
@@ -68,6 +88,7 @@ def audit(source):
         'source_sha256':before,'total_messages':len(rows),'current_type_counts':dict(Counter(row['type'] for row in rows)),
         'audited_type_counts':dict(Counter(row['type'] for row in targets)),
         'observation_count':sum(len(row['views']) for row in results),'capture_image_references':image_refs,
+        'retained_frame_count':len(retained),
         'capture_image_files':sum(path.suffix.lower() in {'.png','.jpg','.jpeg','.bmp','.webp'} for path in root.rglob('*') if path.is_file()),
         'records':results,'applied_repairs':[]}
 

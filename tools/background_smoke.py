@@ -87,7 +87,7 @@ def main():
             source=BackgroundSource(desktop,hwnd,Rect(0,0,client.width,client.height))
             result.update(run_capture(source,args.output/'capture',config=CaptureConfig(capture_backend='background',
                 direction=args.direction,max_frames=args.frames,sample_interval_s=.03,stable_samples=2,settle_delay_s=.15,
-                debug_save_images=True,boundary_wait_s=0),ocr_backend=EmptyOcr(),
+                debug_save_images=True,debug_image_policy='all',boundary_wait_s=0),ocr_backend=EmptyOcr(),
                 progress=progress))
         except Exception as error:errors.append(type(error).__name__+': '+str(error))
     thread=threading.Thread(target=worker);thread.start()

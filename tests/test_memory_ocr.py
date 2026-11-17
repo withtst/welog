@@ -131,7 +131,7 @@ def test_capture_and_all_failures_never_write_images_and_release_memory(tmp_path
             return [TextLine('hello',(70,70,220,100),.99)]
     source=Source()
     result=run_capture(source,str(tmp_path/'session'),config=CaptureConfig(max_frames=1,sample_interval_s=.001,
-                       stable_timeout_s=.12,image_memory_limit_bytes=1000 if failure=='budget' else 64*1024*1024),ocr_backend=Backend())
+                       stable_timeout_s=.12 if failure in {'unstable','budget'} else .5,image_memory_limit_bytes=1000 if failure=='budget' else 64*1024*1024),ocr_backend=Backend())
     assert source.closed and result['image_memory_remaining_bytes']==0
     assert result['image_memory_peak_bytes']<=64*1024*1024
     assert not list(tmp_path.rglob('*.png')) and not list(tmp_path.rglob('*.npy'))

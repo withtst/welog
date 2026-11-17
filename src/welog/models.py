@@ -124,6 +124,7 @@ class CaptureConfig:
     image_memory_limit_bytes: int = 64 * 1024 * 1024
     boundary_wait_s: float = 1.0
     debug_save_images: bool = False
+    debug_image_policy: str = 'events'
     debug_max_bytes: int = 1024 * 1024 * 1024
     capture_backend: str = 'foreground'
     stability_media_max_dynamic_ratio: float = .5
@@ -152,5 +153,6 @@ class CaptureConfig:
         if not 0 <= self.boundary_wait_s <= 30:
             raise ValueError("boundary_wait_s must be between 0 and 30 seconds")
         if self.debug_max_bytes<=0:raise ValueError('debug_max_bytes must be positive')
+        if self.debug_image_policy not in {'events','all'}:raise ValueError('Invalid debug image policy')
         if self.capture_backend not in {'foreground','background'}:raise ValueError('Invalid capture backend')
         if not self.stability_max_dynamic_ratio<=self.stability_media_max_dynamic_ratio<=.6:raise ValueError('Invalid media animation budget')

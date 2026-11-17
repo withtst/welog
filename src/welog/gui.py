@@ -431,8 +431,8 @@ class CaptureWindow(QMainWindow):
         self.reuse_regions.setToolTip("窗口尺寸相同时复用；字体、布局变化后请取消勾选并重新框选。")
         self.reuse_regions.setChecked(True)
         content.addWidget(self.reuse_regions)
-        self.debug_images=QCheckBox('调试采集（保存截图）')
-        self.debug_images.setToolTip('保存聊天区原始 PNG，含未确认帧和超时诊断帧；保存在本次记录 capture/frames，达到 1 GiB 自动停止。每次启动默认关闭。')
+        self.debug_images=QCheckBox('调试采集（仅异常和未知消息截图）')
+        self.debug_images.setToolTip('正常帧不保存；遇到异常保留问题帧、上一确认参考帧和稳定时间窗，未知消息另存区域。达到 1 GiB 停止，每次启动默认关闭。')
         content.addWidget(self.debug_images)
         self.storage_hint=label('','muted')
         content.addWidget(self.storage_hint)
@@ -468,7 +468,7 @@ class CaptureWindow(QMainWindow):
         return page
 
     def capture_storage_label(self):
-        return '调试采集：保存聊天区截图（上限 1 GiB）' if self.debug_images.isChecked() else '普通采集：不保存截图'
+        return '调试采集：保存聊天区截图（仅异常/未知，上限 1 GiB）' if self.debug_images.isChecked() else '普通采集：不保存截图'
 
     def update_debug_ui(self):
         self.storage_hint.setText(self.capture_storage_label())
@@ -696,8 +696,10 @@ class CaptureWindow(QMainWindow):
         elif detail=='BackgroundTargetUnavailable':detail='目标窗口已隐藏、关闭或最小化，采集暂停。'
         elif detail=='BackgroundTargetChanged':detail='窗口布局、聊天控件或会话校验发生变化，请重新校准。'
         elif detail=='BackgroundScrollRejected':detail='后台滚动消息被系统拒绝，已暂停；未使用全局输入。'
+        if result.get('diagnostic_image_save_error') and result.get('reason')!='DebugImageLimit':
+            detail+='\n部分诊断图未能保存，请查看诊断索引中的 image_save_error。'
         if result.get('debug_save_images'):
-            detail+=f"\n调试截图：{result.get('debug_image_count',0)} 张 · {Path(result['output'])/'frames'}"
+            detail+=f"\n调试截图：{result.get('debug_image_count',0)} 张 · {Path(result['output'])}"
         if result.get("replay_excluded", 0):
             detail += f"\n回放已排除 {result['replay_excluded']} 张未确认截图。"
         self.status.setText(f"{labels.get(result['status'], result['status'])} · 接受 {result.get('accepted', 0)} 帧\n"

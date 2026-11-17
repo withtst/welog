@@ -1,4 +1,4 @@
-"""Image-free frame journal. No image path, encoded pixels, or image writer exists here."""
+"""Frame journal. Normal sessions never write pixels; debug subclasses can attach image metadata."""
 from __future__ import annotations
 
 import json

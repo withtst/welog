@@ -36,6 +36,8 @@ def test_debug_retention_is_explicit_and_quota_is_configurable():
     assert not parser.parse_args(['capture','--output','unused']).debug_save_images
     args=parser.parse_args(['capture','--output','unused','--debug-save-images','--debug-max-mb','64'])
     assert args.debug_save_images and args.debug_max_mb==64
+    assert args.debug_image_policy=='events'
+    assert parser.parse_args(['capture','--output','unused','--debug-image-policy','all']).debug_image_policy=='all'
 
 
 def test_replay_cli_defaults_to_recorded_capture_direction():

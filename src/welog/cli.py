@@ -73,6 +73,7 @@ def make_parser() -> argparse.ArgumentParser:
     capture.add_argument("--output", type=Path, required=True)
     capture.add_argument("--max-frames", type=int, default=0, help="0: capture until boundary (default); positive: frame limit")
     capture.add_argument('--debug-save-images',action='store_true',help='Retain raw ROI screenshots for offline debugging')
+    capture.add_argument('--debug-image-policy',choices=['events','all'],default='events',help='events: retain only problems/unknowns; all: full image archive')
     capture.add_argument('--debug-max-mb',type=int,default=1024,help='Debug image quota in MiB; stop when reached')
     capture.add_argument("--wheel-units", type=int, default=120, help="Units per individual wheel event (default 120)")
     capture.add_argument("--direction", choices=["up", "down"], default="down")
@@ -158,6 +159,7 @@ def capture(args: argparse.Namespace) -> int:
     config = CaptureConfig(max_frames=args.max_frames, initial_wheel_units=args.wheel_units,
                            origin_y_px=args.origin_y, direction=args.direction,
                            debug_save_images=args.debug_save_images,debug_max_bytes=args.debug_max_mb*1024*1024,
+                           debug_image_policy=args.debug_image_policy,
                            capture_backend=args.backend)
     alignment = _alignment(args, saved.get("alignment_config"))
     if args.activate and args.backend=='background':raise ValueError('--activate is incompatible with background capture')

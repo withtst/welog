@@ -25,7 +25,7 @@ class Source:
 
 
 def config(**kwargs):
-    return CaptureConfig(debug_save_images=True,direction='up',max_frames=4,sample_interval_s=.001,
+    return CaptureConfig(debug_save_images=True,debug_image_policy='all',direction='up',max_frames=4,sample_interval_s=.001,
         stable_samples=2,settle_delay_s=0,scroll_event_interval_s=0,**kwargs)
 
 

@@ -123,6 +123,8 @@ def image_root(root: Path, metadata: dict) -> Path:
 def archive_frames(path: str | Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     root = Path(path).resolve()
     metadata = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    if metadata.get('storage_mode')=='event_images':
+        raise ValueError('Event-only capture has sparse screenshots; inspect diagnostics.jsonl and retained_frames.jsonl instead of full replay')
     if metadata.get("storage_mode") == "memory_only" or metadata.get("kind") == "live_memory":
         raise ValueError("Memory-only session has no screenshots; open its text report instead")
     frames = read_jsonl(root / "frames.jsonl")

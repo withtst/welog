@@ -96,11 +96,12 @@ class FrameProcessor:
                 result,reference,method=self.motion.accept(image,frame_id,anchors,direction,tuple(masks)+overlay_masks)
                 repair_error=None
                 seam_calls=0
+                message_ids={}
                 if result.accepted:
                     offset=self.motion.offset-self.config.origin_y_px
                     timestamp_reference=datetime.fromisoformat(captured_at.replace('Z','+00:00')) if captured_at else self.capture_reference
                     observe_markers(self.store.connection,labels,offset,image.shape[1],frame_id,timestamp_reference)
-                    for bubble in bubbles:self.assembler.observe(frame_id,bubble,offset,image.shape[0])
+                    for index,bubble in enumerate(bubbles):message_ids[index]=self.assembler.observe(frame_id,bubble,offset,image.shape[0])
                     partial=any(b.kind=='text' and (b.top_state!='visible' or b.bottom_state!='visible') for b in bubbles)
                     media=[(b.box[0],offset+b.box[1],b.box[2],offset+b.box[3]) for b in bubbles if b.kind!='text']
                     if partial or self.previous_partial:
@@ -119,6 +120,10 @@ class FrameProcessor:
                         'scroll_offset_px':self.motion.offset if result.accepted else None,
                         'motion_overlay_masks':[box.to_dict() for box in overlay_masks],
                         'observations':[b.to_dict() for b in bubbles],
+                        'unknown_observations':[{'box':list(b.box),'message_id':message_ids.get(i),'top_state':b.top_state,'bottom_state':b.bottom_state}
+                                                for i,b in enumerate(bubbles) if b.kind=='unknown'],
+                        'ocr_failed_observations':[{'box':list(b.box),'message_id':message_ids.get(i)} for i,b in enumerate(bubbles)
+                            if b.kind in {'text','audio'} and b.ocr_status=='failed' and b.top_state=='visible' and b.bottom_state=='visible'],
                         'labels':[{'text':line.text,'box':line.box,'score':line.score} for line in labels],
                         'ocr_error':ocr_error,'repair_error':repair_error,'seam_ocr_calls':seam_calls}
         finally:

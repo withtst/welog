@@ -66,7 +66,7 @@ class MessageStore:
             page.write('<!doctype html><meta charset="utf-8"><title>WeLog 文字采集报告</title><style>'
                        'body{font:15px system-ui;max-width:1100px;margin:32px auto}td,th{border:1px solid #ddd;padding:8px}'
                        'table{border-collapse:collapse;width:100%}td{white-space:pre-wrap}</style>'
-                       '<h1>WeLog 文字采集报告</h1><p>'+('调试采集：原始截图保存在 frames 目录。' if summary.get('debug_save_images') else '截图仅在内存处理；本报告不含原图。')+'</p>'
+                       '<h1>WeLog 文字采集报告</h1><p>'+('事件调试：只保留异常和未知消息截图，索引见 diagnostics.jsonl。' if summary.get('image_storage')=='event_png' else '调试采集：原始截图保存在 frames 目录。' if summary.get('debug_save_images') else '截图仅在内存处理；本报告不含原图。')+'</p>'
                        '<p>未确认位置的文字保留在 <a href="observations.jsonl">观察记录</a>，不计入已确认消息。</p>')
             page.write('<pre>'+html.escape(json.dumps(summary,ensure_ascii=False,indent=2))+'</pre>')
             page.write('<table><tr><th>方向</th><th>类型</th><th>正文</th><th>完整性</th><th>位置</th></tr>')
