@@ -106,6 +106,9 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
         else:rejected+=1
         logger.info('frame=%s action=%s accepted=%s delta=%s offset=%s method=%s stability=%s',frame['frame_id'],action['kind'],
                     result['accepted'],result['delta_px'],outcome['scroll_offset_px'],outcome['motion_method'],stability['reason'])
+        if result.get('feature_rejection_reason'):
+            logger.info('feature_rejected frame=%s reason=%s total=%s overlap=%s ratio=%s',frame['frame_id'],
+                result['feature_rejection_reason'],result.get('feature_matches_total'),result.get('feature_matches_overlap'),result.get('feature_inlier_ratio'))
         if progress:progress({'frame_id':frame['frame_id'],'accepted':result['accepted'],'reason':result['reason'],
                               'delta_px':result['delta_px'],'scroll_offset_px':outcome['scroll_offset_px']})
         if outcome['ocr_error']:raise RuntimeError('ocr_backend_failed:'+outcome['ocr_error'])

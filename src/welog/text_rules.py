@@ -31,6 +31,20 @@ def audio_duration(text: str) -> int | None:
     return int(match['seconds']) if match else None
 
 
+def notice_region_masks(lines,width,height):
+    """Only standalone unread overlays have a reliable whole-line region to exclude."""
+    from .models import Rect
+    boxes=[]
+    for line in lines:
+        cleaned,changed=clean_notice(line.text)
+        if not changed or cleaned.strip():continue
+        x1,y1,x2,y2=line.box
+        x1,y1=max(0,x1-24),max(0,y1-24)
+        x2,y2=min(width,x2+24),min(height,y2+24)
+        if x2>x1 and y2>y1:boxes.append(Rect(x1,y1,x2-x1,y2-y1))
+    return tuple(boxes)
+
+
 def clean_lines(lines):
     output = []
     for line in lines:

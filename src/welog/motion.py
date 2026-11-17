@@ -24,6 +24,8 @@ class MotionTracker:
             result=AlignmentResult(True,'origin',delta_px=0.,overlap_ratio=1.)
             method='origin'
         else:
+            if self.previous.image.shape!=image.shape[:2]:
+                return AlignmentResult(False,'layout_size_changed'),previous_id,'layout'
             cfg=replace(self.config,masks=self.config.masks+self.masks+tuple(masks))
             aligner=OverlapAligner(cfg)
             current=gray(image);old=self.previous.image
@@ -57,9 +59,14 @@ class MotionTracker:
             if result is None:
                 method='template';result=aligner.estimate(old,current,direction=direction)
             if not result.accepted:
-                feature=self.features(old,current,valid,aligner,direction)
+                old_valid=OverlapAligner(replace(self.config,masks=self.config.masks+self.masks))._valid_mask(current.shape)
+                new_valid=OverlapAligner(replace(self.config,masks=self.config.masks+tuple(masks)))._valid_mask(current.shape)
+                feature=self.features(old,current,valid,aligner,direction,old_valid,new_valid)
                 if feature.accepted:
                     result,method=feature,'static_features'
+                else:
+                    for key in ['feature_matches_total','feature_matches_overlap','feature_inlier_ratio','feature_rejection_reason']:
+                        setattr(result,key,getattr(feature,key))
         if result.accepted:
             replacement=self.budget.copy(gray(image))
             if self.previous:self.previous.release()
@@ -70,27 +77,50 @@ class MotionTracker:
     def allowed(self,delta,height,direction):
         return abs(delta)<=height*(1-self.config.min_overlap_ratio) and (direction=='both' or (delta<=0 if direction=='up' else delta>=0))
 
-    def features(self,old,current,valid,aligner,direction):
+    def features(self,old,current,valid,aligner,direction,previous_valid=None,current_valid=None):
         failed=AlignmentResult(False,'static_features_unconfirmed')
+        def reject(reason):failed.feature_rejection_reason=reason;return failed
         detector=cv2.SIFT_create(nfeatures=2500)
-        a,da=detector.detectAndCompute(old,valid.astype(np.uint8)*255)
-        b,db=detector.detectAndCompute(current,valid.astype(np.uint8)*255)
-        if da is None or db is None or len(a)<12 or len(b)<12:return failed
+        a,da=detector.detectAndCompute(old,(valid if previous_valid is None else previous_valid).astype(np.uint8)*255)
+        b,db=detector.detectAndCompute(current,(valid if current_valid is None else current_valid).astype(np.uint8)*255)
+        if da is None or db is None or len(a)<12 or len(b)<12:return reject('insufficient_features')
         matches=[pair[0] for pair in cv2.BFMatcher().knnMatch(da,db,k=2) if len(pair)==2 and pair[0].distance<pair[1].distance*.7]
-        if len(matches)<12:return failed
+        failed.feature_matches_total=len(matches)
+        if len(matches)<12:return reject('insufficient_unique_features')
         src=np.float32([a[m.queryIdx].pt for m in matches]);dst=np.float32([b[m.trainIdx].pt for m in matches])
-        matrix,inliers=cv2.estimateAffinePartial2D(src,dst,method=cv2.RANSAC,ransacReprojThreshold=1.5,maxIters=5000)
-        if matrix is None:return failed
-        selected=inliers.ravel().astype(bool)
-        if selected.sum()<12 or selected.mean()<.5:return failed
-        if abs(matrix[0,0]-1)>.003 or abs(matrix[1,1]-1)>.003 or abs(matrix[0,1])>.003:return failed
-        shifts=dst[selected]-src[selected];delta=int(round(-float(np.median(shifts[:,1]))))
-        if abs(float(np.median(shifts[:,0])))>1 or not self.allowed(delta,current.shape[0],direction):return failed
-        if max(np.ptp(src[selected,0]),np.ptp(src[selected,1]))<48:return failed
-        error,coverage=aligner._validate(old,current,delta,valid)
-        if error>self.config.max_validation_error or coverage<self.config.min_validation_coverage:return failed
-        return AlignmentResult(True,'aligned',float(delta),(old.shape[0]-abs(delta))/old.shape[0],int(selected.sum()),
-                               residual_px=float(np.max(np.abs(shifts[:,1]+delta))),validation_error=error,validation_coverage=coverage)
+        remaining=np.ones(len(matches),dtype=bool);accepted=[];height=old.shape[0]
+        for _ in range(3):
+            indices=np.flatnonzero(remaining)
+            if len(indices)<12:break
+            matrix,inliers=cv2.estimateAffinePartial2D(src[indices],dst[indices],method=cv2.RANSAC,ransacReprojThreshold=1.5,maxIters=5000)
+            if matrix is None:break
+            selected=np.zeros(len(matches),dtype=bool);selected[indices[inliers.ravel().astype(bool)]]=True
+            remaining[selected]=False
+            if selected.sum()<12:reject('insufficient_consensus');continue
+            if abs(matrix[0,0]-1)>.003 or abs(matrix[1,1]-1)>.003 or abs(matrix[0,1])>.003:
+                reject('non_translation_geometry');continue
+            shifts=dst[selected]-src[selected];delta=int(round(-float(np.median(shifts[:,1]))))
+            if abs(float(np.median(shifts[:,0])))>1 or not self.allowed(delta,height,direction):
+                reject('direction_or_geometry');continue
+            # Novel/disappeared content and fixed viewport overlays outside the actual
+            # overlap must not dilute the consensus for a valid page translation.
+            overlap=(src[:,1]>=max(0,delta))&(src[:,1]<height+min(0,delta))&(dst[:,1]>=max(0,-delta))&(dst[:,1]<height+min(0,-delta))
+            selected &= overlap
+            count=int(overlap.sum());ratio=float(selected.sum()/max(1,count))
+            failed.feature_matches_overlap=count;failed.feature_inlier_ratio=ratio
+            if selected.sum()<12 or ratio<.5:reject('insufficient_overlap_consensus');continue
+            shifts=dst[selected]-src[selected]
+            if max(np.ptp(src[selected,0]),np.ptp(src[selected,1]))<48:reject('insufficient_spatial_support');continue
+            error,coverage=aligner._validate(old,current,delta,valid)
+            if error>self.config.max_validation_error or coverage<self.config.min_validation_coverage:
+                reject('overlap_pixels_changed');continue
+            accepted.append(AlignmentResult(True,'aligned',float(delta),(height-abs(delta))/height,int(selected.sum()),candidates=len(matches),
+                residual_px=float(np.max(np.abs(shifts[:,1]+delta))),validation_error=error,validation_coverage=coverage,
+                feature_matches_total=len(matches),feature_matches_overlap=count,feature_inlier_ratio=ratio))
+        if not accepted:return failed
+        deltas={item.delta_px for item in accepted}
+        if len(deltas)>1 and max(deltas)-min(deltas)>self.config.consensus_tolerance_px:return reject('ambiguous_translations')
+        return max(accepted,key=lambda item:(item.inliers,item.feature_inlier_ratio))
 
     def close(self):
         if self.previous:self.previous.release();self.previous=None

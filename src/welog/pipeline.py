@@ -15,7 +15,7 @@ from .imageio import gray
 from .message_store import MessageStore
 from .motion import MotionTracker
 from .recognition import assign_lines, detect_bubbles
-from .text_rules import clean_lines
+from .text_rules import clean_lines,notice_region_masks
 from .file_cards import mark_candidates
 from .timeline import observe_markers
 
@@ -89,10 +89,11 @@ class FrameProcessor:
                     self.mask_media(clean.image,[b.box for b in bubbles if b.kind!='text' and '_file_candidate' not in b.metadata])
                     try:lines=self.backend.recognize(clean.image)
                     except Exception as error:lines=[];ocr_error=type(error).__name__
+                overlay_masks=notice_region_masks(lines,image.shape[1],image.shape[0])
                 labels=assign_lines(bubbles,lines)
                 anchors=[line for b in bubbles if b.kind=='text' for line in b.lines
                          if not line.notice_removed and line.box[1]>2 and line.box[3]<image.shape[0]-2]
-                result,reference,method=self.motion.accept(image,frame_id,anchors,direction,masks)
+                result,reference,method=self.motion.accept(image,frame_id,anchors,direction,tuple(masks)+overlay_masks)
                 repair_error=None
                 seam_calls=0
                 if result.accepted:
@@ -116,6 +117,7 @@ class FrameProcessor:
                     self.previous_partial=partial
                 return {'alignment':result.to_dict(),'reference_id':reference,'motion_method':method,
                         'scroll_offset_px':self.motion.offset if result.accepted else None,
+                        'motion_overlay_masks':[box.to_dict() for box in overlay_masks],
                         'observations':[b.to_dict() for b in bubbles],
                         'labels':[{'text':line.text,'box':line.box,'score':line.score} for line in labels],
                         'ocr_error':ocr_error,'repair_error':repair_error,'seam_ocr_calls':seam_calls}

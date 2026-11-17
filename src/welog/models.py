@@ -94,6 +94,10 @@ class AlignmentResult:
     validation_error: float | None = None
     validation_coverage: float = 0.0
     matches: list[PatchMatch] = field(default_factory=list)
+    feature_matches_total: int | None = None
+    feature_matches_overlap: int | None = None
+    feature_inlier_ratio: float | None = None
+    feature_rejection_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -13,6 +13,9 @@ from .alignment import OverlapAligner
 from .archive import ReferenceArchive, archive_frames, image_root, read_jsonl, write_json
 from .imageio import read_image
 from .models import AlignmentConfig, AlignmentResult, Rect
+from .motion import MotionTracker
+from .frame_pool import ImageBudget
+from .imageio import gray
 
 
 class CoordinateTracker:
@@ -25,6 +28,7 @@ class CoordinateTracker:
         self.reference_id: str | None = None
         self.scroll_offset_px = 0.0
         self.reference_masks: tuple[Rect, ...] = ()
+        self.feature_verifier=MotionTracker(ImageBudget(),aligner.config)
 
     def accept(self, image: np.ndarray, frame_id: str, *, direction: str = "down",
                dynamic_masks: tuple[Rect, ...] = ()) -> tuple[AlignmentResult, str | None]:
@@ -35,6 +39,11 @@ class CoordinateTracker:
             masks = self.aligner.config.masks + self.reference_masks + dynamic_masks
             aligner = OverlapAligner(replace(self.aligner.config, masks=masks)) if masks else self.aligner
             result = aligner.estimate(self.reference, image, direction=direction)
+            if not result.accepted and self.reference.shape==image.shape:
+                old_valid=OverlapAligner(replace(self.aligner.config,masks=self.aligner.config.masks+self.reference_masks))._valid_mask(image.shape[:2])
+                new_valid=OverlapAligner(replace(self.aligner.config,masks=self.aligner.config.masks+dynamic_masks))._valid_mask(image.shape[:2])
+                feature=self.feature_verifier.features(gray(self.reference),gray(image),aligner._valid_mask(image.shape[:2]),aligner,direction,old_valid,new_valid)
+                if feature.accepted:result=feature
         if result.accepted:
             self.scroll_offset_px += result.delta_px or 0.0
             self.reference = image.copy()
@@ -86,7 +95,7 @@ def run_replay(
             result = AlignmentResult(False, "source_unconfirmed")
             reference = tracker.reference_id
         else:
-            masks = tuple(Rect(**box) for box in action.get("stability", {}).get("dynamic_masks", []))
+            masks = tuple(Rect(**box) for box in action.get("stability", {}).get("dynamic_masks", [])+decisions.get(frame['frame_id'],{}).get('motion_overlay_masks',[]))
             result, reference = tracker.accept(image, captured["frame_id"], direction=frame_direction, dynamic_masks=masks)
         elapsed = (time.perf_counter() - start) * 1000
         record = archive.evaluate(captured, result, reference_id=reference, cumulative_px=tracker.scroll_offset_px)
