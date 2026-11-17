@@ -47,8 +47,8 @@ def wait_for_stable(source,config,alignment,stop_requested=None,diagnostics=None
                 if diagnostics is not None:diagnostics.clear();diagnostics.update(metrics)
                 if result.stable:return sample
             time.sleep(config.sample_interval_s)
-        logger.warning('stability_timeout reason=%s dynamic_ratio=%.4f media_support=%.4f static_matches=%s',
-                       metrics.get('reason'),metrics.get('dynamic_region_ratio',0),metrics.get('media_supported_ratio',0),metrics.get('static_matches',0))
+        logger.warning('stability_timeout reason=%s dynamic_ratio=%.4f media_support=%.4f static_matches=%s static_method=%s',
+                       metrics.get('reason'),metrics.get('dynamic_region_ratio',0),metrics.get('media_supported_ratio',0),metrics.get('static_matches',0),metrics.get('static_method'))
         raise StableTimeout(latest,metrics)
     finally:
         detector.history.clear()
@@ -104,8 +104,8 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
         if result['accepted']:
             accepted+=1;offset=outcome['scroll_offset_px'];reference=frame['frame_id']
         else:rejected+=1
-        logger.info('frame=%s action=%s accepted=%s delta=%s offset=%s method=%s stability=%s',frame['frame_id'],action['kind'],
-                    result['accepted'],result['delta_px'],outcome['scroll_offset_px'],outcome['motion_method'],stability['reason'])
+        logger.info('frame=%s action=%s accepted=%s delta=%s offset=%s method=%s stability=%s static_method=%s static_matches=%s',frame['frame_id'],action['kind'],
+                    result['accepted'],result['delta_px'],outcome['scroll_offset_px'],outcome['motion_method'],stability['reason'],stability.get('static_method'),stability.get('static_matches'))
         if result.get('feature_rejection_reason'):
             logger.info('feature_rejected frame=%s reason=%s total=%s overlap=%s ratio=%s',frame['frame_id'],
                 result['feature_rejection_reason'],result.get('feature_matches_total'),result.get('feature_matches_overlap'),result.get('feature_inlier_ratio'))
