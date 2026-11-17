@@ -1,0 +1,166 @@
+{
+  "downloaded_at": "2026-11-16T13:11:44.354740+00:00",
+  "snapshots": [
+    {
+      "repo": "yaozhwen/wechatOcr",
+      "commit": "b2cde637550e1406f15887cd7bc32e6f6c5716c2",
+      "directory": "research/sources/yaozhwen-wechatOcr-b2cde637550e",
+      "files": [
+        {
+          "path": ".gitattributes",
+          "bytes": 20,
+          "git_blob": "69b47b5ade88fab2dd055b3cfa0858766fb17a47",
+          "sha256": "65b1023623fb87849b0d7e7a39141bd9d2662d98dcd55fefc9e8bf1683d2d934",
+          "url": "https://github.com/yaozhwen/wechatOcr/blob/b2cde637550e1406f15887cd7bc32e6f6c5716c2/.gitattributes"
+        },
+        {
+          "path": ".gitignore",
+          "bytes": 51,
+          "git_blob": "66d5c956985ab61814481516c3b7ad760a382d72",
+          "sha256": "b4564835ebede8b48ac65f32213241511d8006fd9f32ca839243e0836862c08f",
+          "url": "https://github.com/yaozhwen/wechatOcr/blob/b2cde637550e1406f15887cd7bc32e6f6c5716c2/.gitignore"
+        },
+        {
+          "path": "README.md",
+          "bytes": 7217,
+          "git_blob": "a0e5a88cdbf921d90dab7a859bfa2275eb05ae09",
+          "sha256": "973b17d02907b35bc9ac074112e951fdfbe1d92645a646fc94c9f6d108c3dc47",
+          "url": "https://github.com/yaozhwen/wechatOcr/blob/b2cde637550e1406f15887cd7bc32e6f6c5716c2/README.md"
+        },
+        {
+          "path": "main.py",
+          "bytes": 1459,
+          "git_blob": "05a949258791150cfdda25e4091415e8dcadbcef",
+          "sha256": "c025248969c3704cd04fdc214cc0147982197140bc075b9de465ed72f8e1a0e7",
+          "url": "https://github.com/yaozhwen/wechatOcr/blob/b2cde637550e1406f15887cd7bc32e6f6c5716c2/main.py"
+        },
+        {
+          "path": "requirements.txt",
+          "bytes": 137,
+          "git_blob": "b46f9a0950063c17dd6cec08a43f731a5476d685",
+          "sha256": "ed21fc5918d6e0907a44d2882a19367196e751a88100114463f501cb35ec2926",
+          "url": "https://github.com/yaozhwen/wechatOcr/blob/b2cde637550e1406f15887cd7bc32e6f6c5716c2/requirements.txt"
+        },
+        {
+          "path": "start.bat",
+          "bytes": 242,
+          "git_blob": "77d223f5114a3c1ff4e5ccf602462ab19ae73582",
+          "sha256": "4345301e2ca5228e8ac09fc22de8abafabe5ca221ce295e56a795e55bf399cbe",
+          "url": "https://github.com/yaozhwen/wechatOcr/blob/b2cde637550e1406f15887cd7bc32e6f6c5716c2/start.bat"
+        },
+        {
+          "path": "tests/gui_smoke.py",
+          "bytes": 2932,
+          "git_blob": "55326eae70f575f77bcbcf0210e0905531bbe2cc",
+          "sha256": "72e01e0f182a8e487b34165b3a09d5f0c6d0f3791b64ab43fd04e18b8adbf562",
+          "url": "https://github.com/yaozhwen/wechatOcr/blob/b2cde637550e1406f15887cd7bc32e6f6c5716c2/tests/gui_smoke.py"
+        },
+        {
+          "path": "tests/test_group_media.py",
+          "bytes": 7079,
+          "git_blob": "1a30e079ed2c9d1d80460fe053c518789dd8ba5c",
+          "sha256": "ed968a59934ec79ac20bc113949b6580f19becd7b39d6b5768742011c20229b1",
+          "url": "https://github.com/yaozhwen/wechatOcr/blob/b2cde637550e1406f15887cd7bc32e6f6c5716c2/tests/test_group_media.py"
+        },
+        {
+          "path": "tests/test_pipeline.py",
+          "bytes": 10730,
+          "git_blob": "6ba07b91741bd470d6a8c4b4d467580378fe2739",
+          "sha256": "552600af52d42e75f05356f29ed9f1925ca3f2f90afaa6731fe35a80869fc71f",
+          "url": "https://github.com/yaozhwen/wechatOcr/blob/b2cde637550e1406f15887cd7bc32e6f6c5716c2/tests/test_pipeline.py"
+        },
+        {
+          "path": "tests/wgc_smoke.py",
+          "bytes": 2656,
+          "git_blob": "b1b6a09140ff0f37629e6b159dfba9b3415c7431",
+          "sha256": "76c16b4947267405abb395f13dfef2ae3b6aeb156dd595fa9213482ee9e5225f",
+          "url": "https://github.com/yaozhwen/wechatOcr/blob/b2cde637550e1406f15887cd7bc32e6f6c5716c2/tests/wgc_smoke.py"
+        },
+        {
+          "path": "wechat_ocr/__init__.py",
+          "bytes": 149,
+          "git_blob": "ead093491b51ef28ef8b96ce12612eb5e439621d",
+          "sha256": "21c251046ea6773e349bd50da0f123c2fc6b0e8e71cf3d2d38f44060c99f26ee",
+          "url": "https://github.com/yaozhwen/wechatOcr/blob/b2cde637550e1406f15887cd7bc32e6f6c5716c2/wechat_ocr/__init__.py"
+        },
+        {
+          "path": "wechat_ocr/capture.py",
+          "bytes": 6728,
+          "git_blob": "54b94cd8df41b96d0087210563d662d81c148144",
+          "sha256": "18e830aba1f0ef9cd814a97fec30a90107b4990df6c6906fd607f456eeaae5cd",
+          "url": "https://github.com/yaozhwen/wechatOcr/blob/b2cde637550e1406f15887cd7bc32e6f6c5716c2/wechat_ocr/capture.py"
+        },
+        {
+          "path": "wechat_ocr/gui.py",
+          "bytes": 14161,
+          "git_blob": "0f4deba7eb8e0a3424b3235695231c9acc02e27f",
+          "sha256": "35e49d840ee569152e4432864df07acdb3e625338a2a5e6a12d361758e03c673",
+          "url": "https://github.com/yaozhwen/wechatOcr/blob/b2cde637550e1406f15887cd7bc32e6f6c5716c2/wechat_ocr/gui.py"
+        },
+        {
+          "path": "wechat_ocr/recognition.py",
+          "bytes": 18369,
+          "git_blob": "d929cb37979cf753794090e202253a5f2226f0e4",
+          "sha256": "90ed254f9e607014e6c4dac80378a678da63afb131d7876d386aca1d343c693c",
+          "url": "https://github.com/yaozhwen/wechatOcr/blob/b2cde637550e1406f15887cd7bc32e6f6c5716c2/wechat_ocr/recognition.py"
+        },
+        {
+          "path": "wechat_ocr/tracking.py",
+          "bytes": 4796,
+          "git_blob": "87bdccce9d0b61e342a5356805e512e2ed22e175",
+          "sha256": "a7b1f91cf6f2a06b7e611a5533cd4fb2a1be9a1a4dc9f1e949c98cc180997c60",
+          "url": "https://github.com/yaozhwen/wechatOcr/blob/b2cde637550e1406f15887cd7bc32e6f6c5716c2/wechat_ocr/tracking.py"
+        }
+      ]
+    },
+    {
+      "repo": "yuanzal/Weclip",
+      "commit": "d3aa61d521b36ae9ad6081e86c163aa1cf6ecd7f",
+      "directory": "research/sources/yuanzal-Weclip-d3aa61d521b3",
+      "files": [
+        {
+          "path": ".gitignore",
+          "bytes": 401,
+          "git_blob": "180e126d39b616c2799b14521aee0ae7b60b2dd1",
+          "sha256": "ef2896b47896a2354357952032d3beea15c64b35acf6304b05e00cf5340bacb5",
+          "url": "https://github.com/yuanzal/Weclip/blob/d3aa61d521b36ae9ad6081e86c163aa1cf6ecd7f/.gitignore"
+        },
+        {
+          "path": "README.md",
+          "bytes": 4239,
+          "git_blob": "78799dd21c4264d323276c370b3957080dd01952",
+          "sha256": "57c30e25ccf0e03d128ed3ca8cbb1afc26a7bdbc17dc363896ae6d7ec49e5d11",
+          "url": "https://github.com/yuanzal/Weclip/blob/d3aa61d521b36ae9ad6081e86c163aa1cf6ecd7f/README.md"
+        },
+        {
+          "path": "gui_app.py",
+          "bytes": 25720,
+          "git_blob": "e7a3f5f55d5503bd8dbef2ab871eeff41d4a7f07",
+          "sha256": "7e302f15810e779227bf4a926cd68e274f1cbafe54e3f11e1c4e75ddcdcd8c7c",
+          "url": "https://github.com/yuanzal/Weclip/blob/d3aa61d521b36ae9ad6081e86c163aa1cf6ecd7f/gui_app.py"
+        },
+        {
+          "path": "main.py",
+          "bytes": 3728,
+          "git_blob": "892935925f94a76c860ad5ac94a8a8b733294d99",
+          "sha256": "7e994df6f91c9acd06bf92420f17e5bb4bfb3fba4d0c0b3105b2044c51975119",
+          "url": "https://github.com/yuanzal/Weclip/blob/d3aa61d521b36ae9ad6081e86c163aa1cf6ecd7f/main.py"
+        },
+        {
+          "path": "ocr_core.py",
+          "bytes": 33598,
+          "git_blob": "d963523f6c8c2ead0f30cba944b6038f63b4c205",
+          "sha256": "eb9b953351124efa8ae2804cc178ca0c1f426068683067274863f7f3eb831d6f",
+          "url": "https://github.com/yuanzal/Weclip/blob/d3aa61d521b36ae9ad6081e86c163aa1cf6ecd7f/ocr_core.py"
+        },
+        {
+          "path": "requirements.txt",
+          "bytes": 234,
+          "git_blob": "c5bb7cfcb83359b8a941fb175fd65f416db33698",
+          "sha256": "242310f5ca71aac086f1671e12c9417ac7bf208ff85ac46b7afb225abddc8883",
+          "url": "https://github.com/yuanzal/Weclip/blob/d3aa61d521b36ae9ad6081e86c163aa1cf6ecd7f/requirements.txt"
+        }
+      ]
+    }
+  ]
+}

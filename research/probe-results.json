@@ -1,0 +1,130 @@
+{
+  "execution": {
+    "desktop_access": false,
+    "ocr_models_loaded": false,
+    "image_files_written": false,
+    "method": "Whitelisted AST definitions; synthetic arrays and message records"
+  },
+  "bubble_cases": [
+    {
+      "case": "normal",
+      "ya_bubble_count": 1,
+      "ya_complete_flags": [
+        true
+      ],
+      "ya_region_types": [
+        "text"
+      ],
+      "weclip_bubble_count": 1
+    },
+    {
+      "case": "top_clipped",
+      "ya_bubble_count": 1,
+      "ya_complete_flags": [
+        false
+      ],
+      "ya_region_types": [
+        "text"
+      ],
+      "weclip_bubble_count": 0
+    },
+    {
+      "case": "long_48_percent",
+      "ya_bubble_count": 1,
+      "ya_complete_flags": [
+        true
+      ],
+      "ya_region_types": [
+        "text"
+      ],
+      "weclip_bubble_count": 0
+    },
+    {
+      "case": "bottom_clipped",
+      "ya_bubble_count": 1,
+      "ya_complete_flags": [
+        false
+      ],
+      "ya_region_types": [
+        "text"
+      ],
+      "weclip_bubble_count": 1
+    },
+    {
+      "case": "long_88_percent",
+      "ya_bubble_count": 0,
+      "ya_complete_flags": [],
+      "ya_region_types": [
+        "image"
+      ],
+      "weclip_bubble_count": 0
+    }
+  ],
+  "ya_collector": {
+    "direction_cases": [
+      {
+        "direction": "down",
+        "segment_count": 1,
+        "exported_message_count": 3,
+        "last_segment_reason": "首次采集"
+      },
+      {
+        "direction": "up",
+        "segment_count": 2,
+        "exported_message_count": 4,
+        "last_segment_reason": "画面无法连续匹配"
+      }
+    ],
+    "partial_to_complete_segments": 2,
+    "partial_to_complete_records": 2
+  },
+  "ya_animation_gate": {
+    "ready_results": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ],
+    "accepted": 0
+  },
+  "weclip_repeated_messages": [
+    {
+      "input": [
+        "好",
+        "好"
+      ],
+      "output": [
+        "好"
+      ],
+      "input_count": 2,
+      "output_count": 1
+    },
+    {
+      "input": [
+        "好",
+        "明天见",
+        "好"
+      ],
+      "output": [
+        "好",
+        "明天见"
+      ],
+      "input_count": 3,
+      "output_count": 2
+    },
+    {
+      "input": [
+        "下午三点开会",
+        "下午三点开会取消"
+      ],
+      "output": [
+        "下午三点开会"
+      ],
+      "input_count": 2,
+      "output_count": 1
+    }
+  ],
+  "weclip_default_neutral_gray_mask_pixels": 0
+}

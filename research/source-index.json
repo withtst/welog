@@ -1,0 +1,633 @@
+[
+  {
+    "file": "research\\sources\\yaozhwen-wechatOcr-b2cde637550e\\wechat_ocr\\recognition.py",
+    "lines": 349,
+    "definitions": [
+      {
+        "name": "Message",
+        "line": 19,
+        "end": 35
+      },
+      {
+        "name": "Message.to_dict",
+        "line": 31,
+        "end": 35
+      },
+      {
+        "name": "FrameResult",
+        "line": 39,
+        "end": 53
+      },
+      {
+        "name": "FrameResult.to_dict",
+        "line": 49,
+        "end": 53
+      },
+      {
+        "name": "RegionNotFound",
+        "line": 56,
+        "end": 57
+      },
+      {
+        "name": "locate_chat_region",
+        "line": 60,
+        "end": 98
+      },
+      {
+        "name": "validate_region",
+        "line": 101,
+        "end": 107
+      },
+      {
+        "name": "find_bubbles",
+        "line": 110,
+        "end": 143
+      },
+      {
+        "name": "content_regions",
+        "line": 146,
+        "end": 192
+      },
+      {
+        "name": "prepare_ocr",
+        "line": 195,
+        "end": 223
+      },
+      {
+        "name": "read_sender",
+        "line": 226,
+        "end": 238
+      },
+      {
+        "name": "visual_fingerprint",
+        "line": 241,
+        "end": 244
+      },
+      {
+        "name": "get_engine",
+        "line": 248,
+        "end": 253
+      },
+      {
+        "name": "read_lines",
+        "line": 256,
+        "end": 263
+      },
+      {
+        "name": "recognize_frame",
+        "line": 266,
+        "end": 326
+      },
+      {
+        "name": "annotate",
+        "line": 329,
+        "end": 349
+      }
+    ]
+  },
+  {
+    "file": "research\\sources\\yaozhwen-wechatOcr-b2cde637550e\\wechat_ocr\\tracking.py",
+    "lines": 107,
+    "definitions": [
+      {
+        "name": "FrameGate",
+        "line": 12,
+        "end": 35
+      },
+      {
+        "name": "FrameGate.__init__",
+        "line": 15,
+        "end": 17
+      },
+      {
+        "name": "FrameGate.same",
+        "line": 20,
+        "end": 24
+      },
+      {
+        "name": "FrameGate.ready",
+        "line": 26,
+        "end": 32
+      },
+      {
+        "name": "FrameGate.commit",
+        "line": 34,
+        "end": 35
+      },
+      {
+        "name": "Collector",
+        "line": 38,
+        "end": 107
+      },
+      {
+        "name": "Collector.__init__",
+        "line": 41,
+        "end": 45
+      },
+      {
+        "name": "Collector.break_continuity",
+        "line": 47,
+        "end": 49
+      },
+      {
+        "name": "Collector.signature",
+        "line": 52,
+        "end": 54
+      },
+      {
+        "name": "Collector.accept",
+        "line": 56,
+        "end": 101
+      },
+      {
+        "name": "Collector.export",
+        "line": 103,
+        "end": 107
+      }
+    ]
+  },
+  {
+    "file": "research\\sources\\yaozhwen-wechatOcr-b2cde637550e\\wechat_ocr\\capture.py",
+    "lines": 163,
+    "definitions": [
+      {
+        "name": "CaptureUnavailable",
+        "line": 12,
+        "end": 13
+      },
+      {
+        "name": "WindowInfo",
+        "line": 17,
+        "end": 29
+      },
+      {
+        "name": "WindowInfo.calibration_key",
+        "line": 26,
+        "end": 29
+      },
+      {
+        "name": "windows_api",
+        "line": 32,
+        "end": 48
+      },
+      {
+        "name": "enable_dpi_awareness",
+        "line": 51,
+        "end": 56
+      },
+      {
+        "name": "foreground_wechat",
+        "line": 59,
+        "end": 86
+      },
+      {
+        "name": "WgcSession",
+        "line": 89,
+        "end": 131
+      },
+      {
+        "name": "WgcSession.__init__",
+        "line": 92,
+        "end": 115
+      },
+      {
+        "name": "WgcSession.read",
+        "line": 117,
+        "end": 125
+      },
+      {
+        "name": "WgcSession.close",
+        "line": 127,
+        "end": 131
+      },
+      {
+        "name": "WechatCapture",
+        "line": 134,
+        "end": 163
+      },
+      {
+        "name": "WechatCapture.__init__",
+        "line": 137,
+        "end": 139
+      },
+      {
+        "name": "WechatCapture.close",
+        "line": 141,
+        "end": 144
+      },
+      {
+        "name": "WechatCapture.grab",
+        "line": 146,
+        "end": 163
+      }
+    ]
+  },
+  {
+    "file": "research\\sources\\yaozhwen-wechatOcr-b2cde637550e\\wechat_ocr\\gui.py",
+    "lines": 309,
+    "definitions": [
+      {
+        "name": "worker",
+        "line": 23,
+        "end": 103
+      },
+      {
+        "name": "App",
+        "line": 106,
+        "end": 302
+      },
+      {
+        "name": "App.__init__",
+        "line": 109,
+        "end": 140
+      },
+      {
+        "name": "App.send",
+        "line": 142,
+        "end": 144
+      },
+      {
+        "name": "App.start",
+        "line": 146,
+        "end": 149
+      },
+      {
+        "name": "App.pause",
+        "line": 151,
+        "end": 154
+      },
+      {
+        "name": "App.open_file",
+        "line": 156,
+        "end": 162
+      },
+      {
+        "name": "App.poll",
+        "line": 164,
+        "end": 187
+      },
+      {
+        "name": "App.show_image",
+        "line": 189,
+        "end": 193
+      },
+      {
+        "name": "App.render_messages",
+        "line": 195,
+        "end": 205
+      },
+      {
+        "name": "App.calibrate",
+        "line": 207,
+        "end": 265
+      },
+      {
+        "name": "App.clear_calibration",
+        "line": 267,
+        "end": 274
+      },
+      {
+        "name": "App.export",
+        "line": 276,
+        "end": 286
+      },
+      {
+        "name": "App.save_image",
+        "line": 288,
+        "end": 298
+      },
+      {
+        "name": "App.close",
+        "line": 300,
+        "end": 302
+      },
+      {
+        "name": "main",
+        "line": 305,
+        "end": 309
+      }
+    ]
+  },
+  {
+    "file": "research\\sources\\yuanzal-Weclip-d3aa61d521b3\\ocr_core.py",
+    "lines": 959,
+    "definitions": [
+      {
+        "name": "_clamp",
+        "line": 35,
+        "end": 36
+      },
+      {
+        "name": "_hsv_bounds",
+        "line": 39,
+        "end": 48
+      },
+      {
+        "name": "get_wechat_window",
+        "line": 53,
+        "end": 70
+      },
+      {
+        "name": "_chat_region",
+        "line": 72,
+        "end": 82
+      },
+      {
+        "name": "select_region_interactive",
+        "line": 85,
+        "end": 150
+      },
+      {
+        "name": "_build_color_masks",
+        "line": 153,
+        "end": 178
+      },
+      {
+        "name": "_extract_bubbles_from_mask",
+        "line": 181,
+        "end": 199
+      },
+      {
+        "name": "_save_debug_images",
+        "line": 202,
+        "end": 219
+      },
+      {
+        "name": "_detect_color_bubbles",
+        "line": 222,
+        "end": 242
+      },
+      {
+        "name": "_run_ocr_on_file",
+        "line": 245,
+        "end": 329
+      },
+      {
+        "name": "ocr_chat_region",
+        "line": 332,
+        "end": 355
+      },
+      {
+        "name": "_frame_fingerprint",
+        "line": 358,
+        "end": 360
+      },
+      {
+        "name": "_capture_region_bgr",
+        "line": 363,
+        "end": 365
+      },
+      {
+        "name": "_run_ocr_on_bgr",
+        "line": 368,
+        "end": 382
+      },
+      {
+        "name": "_estimate_vertical_shift",
+        "line": 385,
+        "end": 413
+      },
+      {
+        "name": "_best_vertical_overlap",
+        "line": 416,
+        "end": 462
+      },
+      {
+        "name": "stitch_scrolled_captures",
+        "line": 465,
+        "end": 484
+      },
+      {
+        "name": "_overlap_ratio",
+        "line": 487,
+        "end": 495
+      },
+      {
+        "name": "scroll_capture_images",
+        "line": 498,
+        "end": 652
+      },
+      {
+        "name": "scroll_and_collect_frames",
+        "line": 655,
+        "end": 706
+      },
+      {
+        "name": "scroll_and_collect_stitched",
+        "line": 709,
+        "end": 733
+      },
+      {
+        "name": "scroll_and_collect",
+        "line": 736,
+        "end": 764
+      },
+      {
+        "name": "merge_scrolled_frames",
+        "line": 767,
+        "end": 801
+      },
+      {
+        "name": "_message_key",
+        "line": 804,
+        "end": 805
+      },
+      {
+        "name": "_texts_equivalent",
+        "line": 808,
+        "end": 819
+      },
+      {
+        "name": "_rows_match",
+        "line": 822,
+        "end": 830
+      },
+      {
+        "name": "_find_overlap_size",
+        "line": 833,
+        "end": 845
+      },
+      {
+        "name": "_find_best_overlap",
+        "line": 848,
+        "end": 870
+      },
+      {
+        "name": "_merge_by_unique_keys",
+        "line": 873,
+        "end": 901
+      },
+      {
+        "name": "_collapse_adjacent_duplicates",
+        "line": 904,
+        "end": 921
+      },
+      {
+        "name": "_dedupe_near_repeats",
+        "line": 924,
+        "end": 938
+      },
+      {
+        "name": "_normalize_message_text",
+        "line": 941,
+        "end": 942
+      },
+      {
+        "name": "export_txt",
+        "line": 945,
+        "end": 952
+      },
+      {
+        "name": "export_json",
+        "line": 955,
+        "end": 959
+      }
+    ]
+  },
+  {
+    "file": "research\\sources\\yuanzal-Weclip-d3aa61d521b3\\gui_app.py",
+    "lines": 602,
+    "definitions": [
+      {
+        "name": "OcrTunerGUI",
+        "line": 31,
+        "end": 597
+      },
+      {
+        "name": "OcrTunerGUI.__init__",
+        "line": 32,
+        "end": 89
+      },
+      {
+        "name": "OcrTunerGUI.run",
+        "line": 91,
+        "end": 92
+      },
+      {
+        "name": "OcrTunerGUI._pick_font_family",
+        "line": 94,
+        "end": 98
+      },
+      {
+        "name": "OcrTunerGUI._build_layout",
+        "line": 100,
+        "end": 214
+      },
+      {
+        "name": "OcrTunerGUI._add_slider",
+        "line": 216,
+        "end": 223
+      },
+      {
+        "name": "OcrTunerGUI._add_entry",
+        "line": 225,
+        "end": 241
+      },
+      {
+        "name": "OcrTunerGUI._add_path_box",
+        "line": 243,
+        "end": 250
+      },
+      {
+        "name": "OcrTunerGUI._create_round_button",
+        "line": 252,
+        "end": 277
+      },
+      {
+        "name": "OcrTunerGUI.refresh_preview",
+        "line": 279,
+        "end": 302
+      },
+      {
+        "name": "OcrTunerGUI.on_canvas_click",
+        "line": 304,
+        "end": 322
+      },
+      {
+        "name": "OcrTunerGUI.show_scroll_highlighter",
+        "line": 324,
+        "end": 335
+      },
+      {
+        "name": "OcrTunerGUI.show_progress_overlay",
+        "line": 337,
+        "end": 372
+      },
+      {
+        "name": "OcrTunerGUI.update_progress_overlay",
+        "line": 374,
+        "end": 387
+      },
+      {
+        "name": "OcrTunerGUI._close_overlay_windows",
+        "line": 389,
+        "end": 399
+      },
+      {
+        "name": "OcrTunerGUI._restore_main_window",
+        "line": 401,
+        "end": 411
+      },
+      {
+        "name": "OcrTunerGUI.run_scroll_ocr_export",
+        "line": 413,
+        "end": 499
+      },
+      {
+        "name": "OcrTunerGUI._show_image",
+        "line": 501,
+        "end": 514
+      },
+      {
+        "name": "OcrTunerGUI.capture_region",
+        "line": 516,
+        "end": 534
+      },
+      {
+        "name": "OcrTunerGUI.load_image",
+        "line": 536,
+        "end": 543
+      },
+      {
+        "name": "OcrTunerGUI.start_pick",
+        "line": 545,
+        "end": 548
+      },
+      {
+        "name": "OcrTunerGUI.run_ocr_export",
+        "line": 550,
+        "end": 564
+      },
+      {
+        "name": "OcrTunerGUI.choose_out_path",
+        "line": 566,
+        "end": 568
+      },
+      {
+        "name": "OcrTunerGUI.choose_debug_dir",
+        "line": 570,
+        "end": 572
+      },
+      {
+        "name": "OcrTunerGUI._validate_out_path",
+        "line": 574,
+        "end": 578
+      },
+      {
+        "name": "OcrTunerGUI._prepare_debug_dir",
+        "line": 580,
+        "end": 584
+      },
+      {
+        "name": "OcrTunerGUI._current_color_config",
+        "line": 586,
+        "end": 591
+      },
+      {
+        "name": "OcrTunerGUI._export_frames",
+        "line": 593,
+        "end": 597
+      }
+    ]
+  }
+]
