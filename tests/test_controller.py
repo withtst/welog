@@ -33,7 +33,7 @@ class FakeDesktop:
 
 
 def settings(**kwargs):
-    return CaptureConfig(max_frames=20, sample_interval_s=0.001, stable_timeout_s=0.2,
+    return CaptureConfig(max_frames=20, sample_interval_s=0.001, stable_timeout_s=0.5,
                          stable_samples=2, settle_delay_s=0, **kwargs)
 
 

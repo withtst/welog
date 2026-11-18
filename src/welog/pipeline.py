@@ -67,6 +67,7 @@ class FrameProcessor:
         self.motion=MotionTracker(budget,alignment)
         self.boundary=BoundaryBuffer(budget)
         self.previous_partial=False
+        self.media_guard=False
         manifest=json.loads((output/'manifest.json').read_text(encoding='utf-8')) if (output/'manifest.json').exists() else {}
         self.capture_reference=datetime.fromisoformat(manifest['created_at'].replace('Z','+00:00')) if manifest.get('created_at') else None
 
@@ -77,7 +78,7 @@ class FrameProcessor:
             a,b=max(0,int(y1-offset)),min(image.shape[0],int(y2-offset))
             if b>a:image[a:b,max(0,int(x1)):min(image.shape[1],int(x2))]=background
 
-    def process(self,lease,frame_id,masks,direction,captured_at=None):
+    def process(self,lease,frame_id,masks,direction,captured_at=None,motion_bounds=None):
         try:
             image=lease.image
             # Credit for explicit temporary conversion/difference buffers. Model/native workspaces are separate.
@@ -93,11 +94,13 @@ class FrameProcessor:
                 labels=assign_lines(bubbles,lines)
                 anchors=[line for b in bubbles if b.kind=='text' for line in b.lines
                          if not line.notice_removed and line.box[1]>2 and line.box[3]<image.shape[0]-2]
-                result,reference,method=self.motion.accept(image,frame_id,anchors,direction,tuple(masks)+overlay_masks)
+                result,reference,method=self.motion.accept(image,frame_id,anchors,direction,tuple(masks)+overlay_masks,motion_bounds)
+                media_guard=len(anchors)<2 and sum(b.kind in {'image','unknown'} for b in bubbles)>=2 and (bool(masks) or self.media_guard)
                 repair_error=None
                 seam_calls=0
                 message_ids={}
                 if result.accepted:
+                    self.media_guard=media_guard
                     offset=self.motion.offset-self.config.origin_y_px
                     timestamp_reference=datetime.fromisoformat(captured_at.replace('Z','+00:00')) if captured_at else self.capture_reference
                     observe_markers(self.store.connection,labels,offset,image.shape[1],frame_id,timestamp_reference)
@@ -117,6 +120,7 @@ class FrameProcessor:
                     self.boundary.update(image,offset,media)
                     self.previous_partial=partial
                 return {'alignment':result.to_dict(),'reference_id':reference,'motion_method':method,
+                        'media_dominated':media_guard,
                         'scroll_offset_px':self.motion.offset if result.accepted else None,
                         'motion_overlay_masks':[box.to_dict() for box in overlay_masks],
                         'observations':[b.to_dict() for b in bubbles],

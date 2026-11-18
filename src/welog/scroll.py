@@ -25,3 +25,30 @@ class ScrollPlanner:
     def recover(self) -> None:
         self.events = 1
         self.recent_rates.clear()
+
+
+class ScrollCalibration:
+    """An empirical upper bound, never a substitute for measuring image motion.
+
+    Only independently registered scrolls train it. Single-event guarded steps
+    tolerate partial movement and zero at an endpoint; a predicted exact delta
+    would incorrectly exclude both. Evidence is scoped to one live source.
+    """
+    def __init__(self):
+        self.rates = deque(maxlen=8)
+
+    def observe(self, delta_px, events, method):
+        if events < 1 or not delta_px or method == 'bounded_layout':
+            return
+        self.rates.append(abs(delta_px) / events)
+
+    def bounds(self, direction, height):
+        if len(self.rates) < 3 or min(self.rates) <= 0 or max(self.rates) / min(self.rates) > 1.5:
+            return None
+        maximum = math.ceil(max(self.rates) * 1.5 + 8)
+        if maximum >= height * .25:
+            return None
+        return {'minimum': -maximum if direction == 'up' else 0,
+                'maximum': maximum if direction == 'down' else 0,
+                'samples': len(self.rates), 'max_observed_rate': max(self.rates),
+                'basis': 'verified_scrolls_single_event'}

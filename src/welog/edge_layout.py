@@ -19,7 +19,7 @@ def without_media(valid,regions):
     return result
 
 
-def estimate_edge_layout(old,current,old_valid,new_valid,aligner,direction):
+def estimate_edge_layout(old,current,old_valid,new_valid,aligner,direction,motion_bounds=None):
     failed=AlignmentResult(False,'edge_layout_unconfirmed')
     h,w=old.shape;ph,pw=12,16
     old_valid=old_valid.copy();new_valid=new_valid.copy()
@@ -27,8 +27,12 @@ def estimate_edge_layout(old,current,old_valid,new_valid,aligner,direction):
         valid[:4]=False;valid[-4:]=False;valid[:,:4]=False;valid[:,-4:]=False
     maximum=int(h*(1-aligner.config.min_overlap_ratio))
     low,high={'up':(-maximum,0),'down':(0,maximum),'both':(-maximum,maximum)}[direction]
+    if motion_bounds is not None:
+        low=max(low,int(motion_bounds['minimum']));high=min(high,int(motion_bounds['maximum']))
     seeds=[]
-    for band in [range(0,min(48,h-ph)+1,8),range(max(0,h-48),h-ph+1,8)]:
+    # A repeated-avatar page can have no texture at either viewport edge.
+    for start in range(0,h,112):
+        band=range(start,min(start+112,h-ph+1),8)
         candidates=[]
         for y in band:
             for x in range(0,w-pw+1,8):
@@ -90,7 +94,13 @@ def estimate_edge_layout(old,current,old_valid,new_valid,aligner,direction):
         if len(points)<6 or len(points)/max(1,tested)<.85:
             failed.reason='edge_layout_insufficient_support';continue
         spread=np.ptp(np.array(points),axis=0)
-        if min(spread)<48:
+        rows=sorted({y for _,y in points})
+        clusters=1+sum(b-a>24 for a,b in zip(rows,rows[1:]))
+        broad=min(spread)>=48
+        # Narrow layouts need measured scroll bounds and several independent
+        # avatar rows. Multiple translations inside those bounds still fail.
+        narrow=motion_bounds is not None and spread[0]>=16 and spread[1]>=48 and clusters>=3
+        if not broad and not narrow:
             failed.reason='edge_layout_narrow_support';continue
         accepted.append(AlignmentResult(True,'edge_layout_aligned',float(delta),length/h,len(points),candidates=len(centers),
             validation_error=error,validation_coverage=coverage))

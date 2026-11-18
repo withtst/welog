@@ -32,7 +32,7 @@ class CoordinateTracker:
         self.feature_verifier=MotionTracker(ImageBudget(),aligner.config)
 
     def accept(self, image: np.ndarray, frame_id: str, *, direction: str = "down",
-               dynamic_masks: tuple[Rect, ...] = ()) -> tuple[AlignmentResult, str | None]:
+               dynamic_masks: tuple[Rect, ...] = (), motion_bounds=None) -> tuple[AlignmentResult, str | None]:
         previous_id = self.reference_id
         if self.reference is None:
             result = AlignmentResult(True, "origin", delta_px=0.0, overlap_ratio=1.0)
@@ -50,7 +50,13 @@ class CoordinateTracker:
                     edge=estimate_edge_layout(gray(self.reference),gray(image),without_media(old_valid,self.layout_regions),
                         without_media(new_valid,layout_media_regions(image)),aligner,direction)
                     if edge.accepted:result=edge
-                    else:result.edge_rejection_reason=edge.reason
+                    else:
+                        result.edge_rejection_reason=edge.reason
+                        if motion_bounds is not None:
+                            bounded=estimate_edge_layout(gray(self.reference),gray(image),without_media(old_valid,self.layout_regions),
+                                without_media(new_valid,layout_media_regions(image)),aligner,direction,motion_bounds)
+                            if bounded.accepted:result=bounded
+                            else:result.edge_rejection_reason=bounded.reason
         if result.accepted:
             from .edge_layout import layout_media_regions
             self.scroll_offset_px += result.delta_px or 0.0
@@ -105,7 +111,8 @@ def run_replay(
             reference = tracker.reference_id
         else:
             masks = tuple(Rect(**box) for box in action.get("stability", {}).get("dynamic_masks", [])+decisions.get(frame['frame_id'],{}).get('motion_overlay_masks',[]))
-            result, reference = tracker.accept(image, captured["frame_id"], direction=frame_direction, dynamic_masks=masks)
+            result, reference = tracker.accept(image, captured["frame_id"], direction=frame_direction, dynamic_masks=masks,
+                motion_bounds=action.get('motion_bounds') if action.get('kind') in {'scroll','retry'} else None)
         elapsed = (time.perf_counter() - start) * 1000
         record = archive.evaluate(captured, result, reference_id=reference, cumulative_px=tracker.scroll_offset_px)
         truth = frame.get("true_scroll_px")

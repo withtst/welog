@@ -12,7 +12,7 @@ from .frame_pool import ImageBudget
 from .models import AlignmentConfig,AlignmentResult,CaptureConfig,Rect
 from .pipeline import OcrWorker
 from .recognition import RapidOcrAdapter
-from .scroll import ScrollPlanner
+from .scroll import ScrollPlanner,ScrollCalibration
 from .session import MemorySession
 from .stability import LayoutStabilityDetector
 
@@ -72,6 +72,7 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
     worker=None;session=None;accepted=rejected=0;offset=0.;reference=None
     status,reason='needs_attention','not_started'
     planner=ScrollPlanner(min(config.target_step_ratio,(1-alignment.min_overlap_ratio)*.9),config.max_scroll_events)
+    calibration=ScrollCalibration();media_dominated=False;last_motion_method=None
     sign=1 if config.direction=='down' else -1
     stationary=0;motion_observed=False;last_action={'kind':'initial'};diagnostic_save_error=None
     events_enabled=config.debug_save_images and config.debug_image_policy=='events'
@@ -98,6 +99,7 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
 
     def attempt(action):
         nonlocal accepted,rejected,offset,reference,last_action
+        nonlocal media_dominated,last_motion_method
         nonlocal debug_reference,debug_reference_frame,last_attempt_image,last_attempt_frame,last_attempt_accepted
         last_action=action;stability={}
         last_attempt_image=None;last_attempt_frame=None;last_attempt_accepted=False
@@ -105,7 +107,7 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
         frame=capture_frame(image,{**action,'stability':stability})
         if events_enabled:last_attempt_image=image;last_attempt_frame=frame
         lease=budget.copy(image)
-        future=worker.submit(lease,frame['frame_id'],tuple(Rect(**b) for b in stability.get('dynamic_masks',[])),config.direction,frame['captured_at'])
+        future=worker.submit(lease,frame['frame_id'],tuple(Rect(**b) for b in stability.get('dynamic_masks',[])),config.direction,frame['captured_at'],action.get('motion_bounds'))
         # Only one unverified transition is allowed: this wait supplies backpressure.
         # The model owns the lease until it finishes, even after a stop request.
         stop_latched=False
@@ -120,6 +122,8 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
         last_attempt_accepted=bool(result['accepted'])
         if result['accepted']:
             accepted+=1;offset=outcome['scroll_offset_px'];reference=frame['frame_id']
+            media_dominated=outcome.get('media_dominated',False)
+            last_motion_method=outcome['motion_method']
         else:rejected+=1
         if events_enabled:
             previous=(debug_reference_frame,debug_reference.image) if debug_reference else None
@@ -153,22 +157,30 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
         attempt({'kind':'initial'})
         while has_capacity():
             if config.max_frames==0 and stationary:wait_at_boundary()
-            events=planner.events
+            events=1 if media_dominated else planner.events
             last_action={'kind':'scroll','events':events,'event_units':sign*config.initial_wheel_units,
                          'wheel_units':sign*config.initial_wheel_units*events}
+            if media_dominated:
+                last_action['scroll_guard']='media_dominated'
+                bounds=calibration.bounds(config.direction,session.last_height)
+                if bounds is not None:last_action['motion_bounds']=bounds
+                logger.info('media_scroll_guard events=%s calibrated=%s bounds=%s',events,bounds is not None,bounds)
             for index in range(events):
                 if stopped():raise KeyboardInterrupt
                 source.scroll(sign*config.initial_wheel_units)
                 if index+1<events:time.sleep(config.scroll_event_interval_s)
             time.sleep(config.settle_delay_s)
             result=attempt(last_action)
+            pending_bounds=last_action.get('motion_bounds')
             recovered=False
             if not result['accepted']:
                 for _ in range(config.recovery_attempts):
                     if stopped():raise KeyboardInterrupt
                     if not has_capacity():break
                     time.sleep(config.settle_delay_s)
-                    result=attempt({'kind':'retry','wheel_units':0,'events':0})
+                    retry={'kind':'retry','wheel_units':0,'events':0}
+                    if pending_bounds is not None:retry['motion_bounds']=pending_bounds
+                    result=attempt(retry)
                     if result['accepted']:break
                 planner.recover()
                 if not result['accepted']:
@@ -177,6 +189,7 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
             delta=result['delta_px'] or 0.
             stationary=stationary+1 if delta==0 else 0
             motion_observed=motion_observed or delta!=0
+            calibration.observe(delta,events,last_motion_method)
             if stationary>=config.bottom_attempts:
                 status,reason=('visible_end_candidate','repeated_verified_zero_motion') if motion_observed else ('needs_attention','no_scroll_motion')
                 if motion_observed and config.max_frames==0:status='boundary_reached'

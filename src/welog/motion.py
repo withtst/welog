@@ -19,7 +19,7 @@ class MotionTracker:
         self.offset=0.;self.reference_id=None
         self.layout_regions=()
 
-    def accept(self,image,frame_id,lines,direction,masks=()):
+    def accept(self,image,frame_id,lines,direction,masks=(),motion_bounds=None):
         previous_id=self.reference_id
         if self.previous is None:
             result=AlignmentResult(True,'origin',delta_px=0.,overlap_ratio=1.)
@@ -72,7 +72,13 @@ class MotionTracker:
                     edge=estimate_edge_layout(old,current,without_media(old_valid,self.layout_regions),
                         without_media(new_valid,layout_media_regions(image)),aligner,direction)
                     if edge.accepted:result,method=edge,'edge_layout'
-                    else:result.edge_rejection_reason=edge.reason
+                    else:
+                        result.edge_rejection_reason=edge.reason
+                        if motion_bounds is not None:
+                            bounded=estimate_edge_layout(old,current,without_media(old_valid,self.layout_regions),
+                                without_media(new_valid,layout_media_regions(image)),aligner,direction,motion_bounds)
+                            if bounded.accepted:result,method=bounded,'bounded_layout'
+                            else:result.edge_rejection_reason=bounded.reason
         if result.accepted:
             from .edge_layout import layout_media_regions
             replacement=self.budget.copy(gray(image))
