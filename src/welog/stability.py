@@ -41,14 +41,20 @@ class LayoutStabilityDetector:
         self.history: deque[np.ndarray] = deque(maxlen=samples)
         self.media_history=deque(maxlen=samples)
 
-    def observe(self, image: np.ndarray) -> StabilityResult:
+    def observe(self, image: np.ndarray, *, media_regions=None) -> StabilityResult:
         current = gray(image).copy()
         if self.history and self.history[-1].shape != current.shape:
             self.history.clear()
             self.media_history.clear()
         self.history.append(current)
-        from .recognition import detect_bubbles
-        self.media_history.append([b.box for b in detect_bubbles(image,include_small_edge_media=True) if b.kind=='image'] if image.ndim==3 else [])
+        from .recognition import detect_bubbles,achromatic_media_regions,extend_media_components
+        regions=([b.box for b in detect_bubbles(image,include_small_edge_media=True) if b.kind=='image']
+                 if image.ndim==3 else achromatic_media_regions(image,include_small_edge_media=True))
+        # Offline gray temporal samples retain their original RGB layout hints.
+        # Re-detect gray silhouettes as well, so missed hints can be corrected.
+        if media_regions is not None:regions.extend(tuple(box) for box in media_regions)
+        if image.ndim==2:regions=extend_media_components(image,regions)
+        self.media_history.append(regions)
         if len(self.history) < self.samples:
             return StabilityResult(False, "collecting_samples", len(self.history))
         reference = self.history[0]

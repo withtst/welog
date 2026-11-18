@@ -70,6 +70,75 @@ class EmptyOcr:
         return []
 
 
+def achromatic_media_regions(image, text_boxes=(), *, include_small_edge_media=False):
+    """Conservative gray silhouettes, including viewport-clipped graphics.
+
+    Rectangular chat panels and small disconnected glyphs remain text. These
+    are layout hints; temporal stability still needs independent static proof.
+    """
+    mono=image if image.ndim==2 else cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
+    h,w=mono.shape;margin=max(1,min(24,int(w*.03)))
+    background=float(np.median(np.concatenate([mono[:,:margin].ravel(),mono[:,-margin:].ravel()])))
+    foreground=(np.abs(mono.astype(np.int16)-background)>12).astype(np.uint8)
+    foreground[:4]=0;foreground[-4:]=0;foreground[:,:4]=0;foreground[:,-4:]=0
+    contours,_=cv2.findContours(foreground,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+    regions=[]
+    for contour in contours:
+        x,y,bw,bh=cv2.boundingRect(contour);clipped=y<=4 or y+bh>=h-4
+        small_edge=include_small_edge_media and clipped
+        if bw<(8 if small_edge else 45) or bh<(2 if small_edge else 8 if clipped else 24) or bw*bh<(64 if small_edge else 256):continue
+        if x<w*.05 or x+bw>w*.94 or not (x<w*.25 or x+bw>w*.75):continue
+        density=float(foreground[y:y+bh,x:x+bw].mean())
+        if not .15<=density<=(.95 if small_edge else .85):continue
+        if (mono[y:y+bh,x:x+bw]<background-35).mean()<.08:continue
+        if image.ndim==3:
+            patch=image[y:y+bh,x:x+bw].astype(np.int16)
+            if (patch.max(2)-patch.min(2)>35).mean()>=.02:continue
+        cx,cy=x+bw/2,y+bh/2
+        if any(a<=cx<c and b<=cy<d for a,b,c,d in text_boxes):continue
+        regions.append((max(0,x-2),0 if y<=4 else y-2,min(w,x+bw+2),h if y+bh>=h-4 else y+bh+2))
+    return regions
+
+
+def extend_media_components(image, regions, text_boxes=()):
+    """Attach nearby compact satellites (e.g. a floating heart) to one graphic.
+
+    Text panels and avatar lanes are excluded. Use original seeds, preventing
+    recursive chains from growing into neighboring messages.
+    """
+    seeds=[tuple(box) for box in regions]
+    if not seeds:return []
+    mono=image if image.ndim==2 else cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
+    h,w=mono.shape;margin=max(1,min(24,int(w*.03)))
+    bg=float(np.median(np.concatenate([mono[:,:margin].ravel(),mono[:,-margin:].ravel()])))
+    mask=(np.abs(mono.astype(np.int16)-bg)>12).astype(np.uint8)
+    mask[:4]=0;mask[-4:]=0;mask[:,:4]=0;mask[:,-4:]=0
+    contours,_=cv2.findContours(mask,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+    result=[list(box) for box in seeds]
+    for contour in contours:
+        x,y,bw,bh=cv2.boundingRect(contour)
+        if not (16<=bw<=44 and 12<=bh<=44) or bw*bh<192:continue
+        if x<w*.05 or x+bw>w*.94:continue
+        if mask[y:y+bh,x:x+bw].mean()<.4:continue
+        if any(a<=x+bw/2<c and b<=y+bh/2<d for a,b,c,d in text_boxes):continue
+        if any(a<=x and b<=y and c>=x+bw and d>=y+bh for a,b,c,d in seeds):continue
+        matches=[]
+        for i,(a,b,c,d) in enumerate(seeds):
+            ox=max(0,min(c,x+bw)-max(a,x));oy=max(0,min(d,y+bh)-max(b,y))
+            dx=max(0,a-x-bw,x-c);dy=max(0,b-y-bh,y-d)
+            if (ox>=min(bw,c-a)*.5 and dy<=12) or (oy>=min(bh,d-b)*.5 and dx<=8):matches.append(i)
+        if not matches:continue
+        # Overlapping RGB/gray proposals may describe the same seed. Distinct
+        # neighboring graphics cannot share an ambiguous satellite.
+        first=seeds[matches[0]]
+        if any(max(0,min(first[2],seeds[i][2])-max(first[0],seeds[i][0]))*
+               max(0,min(first[3],seeds[i][3])-max(first[1],seeds[i][1]))<
+               .5*min((first[2]-first[0])*(first[3]-first[1]),(seeds[i][2]-seeds[i][0])*(seeds[i][3]-seeds[i][1])) for i in matches[1:]):continue
+        for i in matches:
+            a,b,c,d=result[i];result[i]=[min(a,max(0,x-2)),min(b,max(0,y-2)),max(c,min(w,x+bw+2)),max(d,min(h,y+bh+2))]
+    return [tuple(box) for box in result]
+
+
 def detect_bubbles(bgr: np.ndarray, *, include_small_edge_media: bool = False) -> list[Bubble]:
     """Light-theme private-chat baseline. Keep long and viewport-clipped bodies."""
     h, w = bgr.shape[:2]
@@ -149,6 +218,17 @@ def detect_bubbles(bgr: np.ndarray, *, include_small_edge_media: bool = False) -
             if any(item.kind=='image' and item.box[0]<=a and item.box[1]<=b and item.box[2]>=c and item.box[3]>=d for item in candidates):continue
             candidates.append(Bubble((a,b,c,d),'incoming' if x<w*.25 else 'outgoing','image',
                 'clipped' if y<=8 else 'visible','clipped' if y+bh>=h-8 else 'visible'))
+    # Gray stickers can carry substantial motion despite having no chroma.
+    for box in achromatic_media_regions(bgr,[b.box for b in candidates if b.kind=='text'],include_small_edge_media=include_small_edge_media):
+        a,b,c,d=box
+        if any(item.kind in {'image','unknown'} and item.box[0]<=a and item.box[1]<=b and item.box[2]>=c and item.box[3]>=d for item in candidates):continue
+        candidates.append(Bubble(box,'incoming' if a<w*.25 else 'outgoing','image',
+            'clipped' if b==0 else 'visible','clipped' if d==h else 'visible'))
+    media=[b for b in candidates if b.kind=='image']
+    for bubble,box in zip(media,extend_media_components(bgr,[b.box for b in media],[b.box for b in candidates if b.kind=='text'])):
+        bubble.box=box
+        if box[1]==0:bubble.top_state='clipped'
+        if box[3]==h:bubble.bottom_state='clipped'
     return sorted(candidates,key=lambda b:(b.box[1],b.box[0]))
 
 
