@@ -60,6 +60,17 @@ def test_scaling_cannot_be_explained_as_page_translation():
     assert not estimate_edge_layout(images[0],enlarged,valid[0],np.ones(enlarged.shape,bool),OverlapAligner(),'both').accepted
 
 
+def test_small_fragments_alone_cannot_replace_large_static_evidence():
+    rng=np.random.default_rng(94)
+    world=np.full((1000,512),250,np.uint8);valid=np.zeros(world.shape,bool)
+    for y in range(20,970,24):
+        for x in [80,320]:
+            world[y:y+8,x:x+32]=rng.integers(0,256,(8,32),dtype=np.uint8)
+            valid[y:y+8,x:x+32]=True
+    result=estimate_edge_layout(world[100:700],world[76:676],valid[100:700],valid[76:676],OverlapAligner(),'up')
+    assert not result.accepted and result.reason=='edge_layout_insufficient_large_support'
+
+
 ROOT=Path('runs/pointer-20261117-165048-026bc5/capture')
 @pytest.mark.skipif(not ROOT.exists(),reason='Private diagnostic pair unavailable')
 def test_real_pair_has_independent_spatial_evidence_without_rewriting_capture():

@@ -139,6 +139,8 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
             logger.info('feature_rejected frame=%s reason=%s total=%s overlap=%s ratio=%s',frame['frame_id'],
                 result['feature_rejection_reason'],result.get('feature_matches_total'),result.get('feature_matches_overlap'),result.get('feature_inlier_ratio'))
         if result.get('edge_rejection_reason'):logger.info('edge_rejected frame=%s reason=%s',frame['frame_id'],result['edge_rejection_reason'])
+        if result['reason'].startswith('edge_layout_aligned_'):
+            logger.info('edge_clipped_anchor_verified frame=%s reason=%s',frame['frame_id'],result['reason'])
         if progress:progress({'frame_id':frame['frame_id'],'accepted':result['accepted'],'reason':result['reason'],
                               'delta_px':result['delta_px'],'scroll_offset_px':outcome['scroll_offset_px']})
         if outcome['ocr_error']:raise RuntimeError('ocr_backend_failed:'+outcome['ocr_error'])

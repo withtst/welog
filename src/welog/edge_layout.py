@@ -1,4 +1,4 @@
-"""Small edge anchors propose motion; distributed overlap layout must independently verify it."""
+"""Static anchors at several scales propose motion; overlap layout verifies it."""
 import cv2
 import numpy as np
 from .models import AlignmentResult,Rect
@@ -19,9 +19,44 @@ def without_media(valid,regions):
     return result
 
 
+def _static_support(old,current,old_valid,new_valid,delta,aligner,ph,pw=16):
+    pa,pb=max(0,delta),max(0,-delta);length=len(old)-abs(delta)
+    points=[];tested=0
+    for y in range(0,length-ph+1,ph):
+        for x in range(0,old.shape[1]-pw+1,pw):
+            if not old_valid[pa+y:pa+y+ph,x:x+pw].all() or not new_valid[pb+y:pb+y+ph,x:x+pw].all():continue
+            a=old[pa+y:pa+y+ph,x:x+pw];b=current[pb+y:pb+y+ph,x:x+pw]
+            if a.std()<aligner.config.min_texture_std:continue
+            if (np.abs(cv2.Laplacian(a,cv2.CV_32F))>25).mean()<.05:continue
+            tested+=1
+            if np.abs(a.astype(np.int16)-b.astype(np.int16)).mean()<=2:
+                if float(cv2.matchTemplate(a,b,cv2.TM_CCOEFF_NORMED)[0,0])>=.97:points.append((x,pa+y))
+    return points,tested
+
+
 def estimate_edge_layout(old,current,old_valid,new_valid,aligner,direction,motion_bounds=None):
+    large=_estimate_scale(old,current,old_valid,new_valid,aligner,direction,motion_bounds,12)
+    if large.accepted:return large
+    accepted=[];failures=[large]
+    # A clipped bubble may leave fewer than 12 rows. Small fragments can resolve
+    # repeated avatar aliases, but must be corroborated by full-size patches.
+    for height in (8,6):
+        result=_estimate_scale(old,current,old_valid,new_valid,aligner,direction,motion_bounds,height)
+        if result.accepted:accepted.append(result)
+        else:failures.append(result)
+    if accepted:
+        if max(r.delta_px for r in accepted)-min(r.delta_px for r in accepted)>2:
+            return AlignmentResult(False,'ambiguous_multiscale_layout')
+        return accepted[0]  # Prefer the larger successful native patch.
+    for reason in ('edge_layout_needs_motion_bounds','edge_layout_insufficient_large_support'):
+        for result in failures:
+            if result.reason==reason:return result
+    return large
+
+
+def _estimate_scale(old,current,old_valid,new_valid,aligner,direction,motion_bounds,patch_height):
     failed=AlignmentResult(False,'edge_layout_unconfirmed')
-    h,w=old.shape;ph,pw=12,16
+    h,w=old.shape;ph,pw=patch_height,16
     old_valid=old_valid.copy();new_valid=new_valid.copy()
     for valid in (old_valid,new_valid):
         valid[:4]=False;valid[-4:]=False;valid[:,:4]=False;valid[:,-4:]=False
@@ -81,19 +116,14 @@ def estimate_edge_layout(old,current,old_valid,new_valid,aligner,direction,motio
         if error>aligner.config.max_validation_error or coverage<aligner.config.min_validation_coverage:
             failed.reason='edge_layout_pixels_changed';continue
         pa,pb=max(0,delta),max(0,-delta);length=h-abs(delta)
-        points=[];tested=0
-        for y in range(0,length-ph+1,12):
-            for x in range(0,w-pw+1,16):
-                if not old_valid[pa+y:pa+y+ph,x:x+pw].all() or not new_valid[pb+y:pb+y+ph,x:x+pw].all():continue
-                a=old[pa+y:pa+y+ph,x:x+pw];b=current[pb+y:pb+y+ph,x:x+pw]
-                if a.std()<aligner.config.min_texture_std:continue
-                if (np.abs(cv2.Laplacian(a,cv2.CV_32F))>25).mean()<.05:continue
-                tested+=1
-                if np.abs(a.astype(np.int16)-b.astype(np.int16)).mean()<=2:
-                    if float(cv2.matchTemplate(a,b,cv2.TM_CCOEFF_NORMED)[0,0])>=.97:points.append((x,pa+y))
+        points,tested=_static_support(old,current,old_valid,new_valid,delta,aligner,ph)
         if len(points)<6 or len(points)/max(1,tested)<.85:
             failed.reason='edge_layout_insufficient_support';continue
         spread=np.ptp(np.array(points),axis=0)
+        if ph<12:
+            robust,total=_static_support(old,current,old_valid,new_valid,delta,aligner,12)
+            if len(robust)<6 or len(robust)/max(1,total)<.85 or max(np.ptp(np.array(robust),axis=0))<48:
+                failed.reason='edge_layout_insufficient_large_support';continue
         rows=sorted({y for _,y in points})
         clusters=1+sum(b-a>24 for a,b in zip(rows,rows[1:]))
         broad=min(spread)>=48
@@ -104,7 +134,8 @@ def estimate_edge_layout(old,current,old_valid,new_valid,aligner,direction,motio
             needs_bounds=True
         if not broad and not narrow:
             failed.reason='edge_layout_narrow_support';continue
-        accepted.append(AlignmentResult(True,'edge_layout_aligned',float(delta),length/h,len(points),candidates=len(centers),
+        reason='edge_layout_aligned' if ph==12 else f'edge_layout_aligned_{ph}px'
+        accepted.append(AlignmentResult(True,reason,float(delta),length/h,len(points),candidates=len(centers),
             validation_error=error,validation_coverage=coverage))
     if not accepted:
         if needs_bounds:failed.reason='edge_layout_needs_motion_bounds'
