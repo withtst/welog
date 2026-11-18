@@ -43,8 +43,11 @@ class ScrollCalibration:
         self.rates.append(abs(delta_px) / events)
 
     def bounds(self, direction, height):
-        if len(self.rates) < 3 or min(self.rates) <= 0 or max(self.rates) / min(self.rates) > 1.5:
+        if len(self.rates) < 3 or min(self.rates) <= 0:
             return None
+        # Startup and boundary steps can be short. They cannot invalidate an
+        # upper bound, whereas a large observation must increase it (or disable
+        # it via the viewport cap below). Never trim high values as outliers.
         maximum = math.ceil(max(self.rates) * 1.5 + 8)
         if maximum >= height * .25:
             return None

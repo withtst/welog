@@ -74,7 +74,7 @@ def estimate_edge_layout(old,current,old_valid,new_valid,aligner,direction,motio
         failed.reason='edge_layout_no_anchors';return failed
     if len(centers)>24:
         failed.reason='edge_layout_too_many_candidates';return failed
-    accepted=[]
+    accepted=[];needs_bounds=False
     joint=old_valid&new_valid
     for delta in centers:
         error,coverage=aligner._validate(old,current,delta,joint)
@@ -100,11 +100,15 @@ def estimate_edge_layout(old,current,old_valid,new_valid,aligner,direction,motio
         # Narrow layouts need measured scroll bounds and several independent
         # avatar rows. Multiple translations inside those bounds still fail.
         narrow=motion_bounds is not None and spread[0]>=16 and spread[1]>=48 and clusters>=3
+        if motion_bounds is None and spread[0]>=16 and spread[1]>=48 and clusters>=3:
+            needs_bounds=True
         if not broad and not narrow:
             failed.reason='edge_layout_narrow_support';continue
         accepted.append(AlignmentResult(True,'edge_layout_aligned',float(delta),length/h,len(points),candidates=len(centers),
             validation_error=error,validation_coverage=coverage))
-    if not accepted:return failed
+    if not accepted:
+        if needs_bounds:failed.reason='edge_layout_needs_motion_bounds'
+        return failed
     if max(r.delta_px for r in accepted)-min(r.delta_px for r in accepted)>2:
         return AlignmentResult(False,'ambiguous_edge_layout')
     return max(accepted,key=lambda r:r.inliers)
