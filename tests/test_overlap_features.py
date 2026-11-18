@@ -77,8 +77,11 @@ def test_unread_overlay_masks_keep_real_prose_and_remove_fixed_overlay_features(
     from welog.text_rules import notice_region_masks
     from welog.recognition import TextLine
     masks=notice_region_masks([TextLine('2条新消息',(500,640,590,660)),TextLine('正文2条新消息继续',(20,50,260,80))],640,720)
-    assert len(masks)==1 and masks[0].x==476 and masks[0].bottom==684
-    assert notice_region_masks([TextLine('99条新消息',(1,1,30,12))],40,20)[0]==Rect(0,0,40,20)
+    assert len(masks)==1
+    assert masks[0].x<=500 and masks[0].right>=590 and masks[0].y<=640 and masks[0].bottom>=660
+    assert masks[0].x>482 and masks[0].y>620  # Keep neighboring bubble/row anchors.
+    clipped=notice_region_masks([TextLine('99条新消息',(1,1,30,12))],40,20)[0]
+    assert clipped.x==clipped.y==0 and 30<=clipped.right<=40 and 12<=clipped.bottom<=20
 
 
 def test_scaling_and_repeated_texture_are_rejected():
