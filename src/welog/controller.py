@@ -133,8 +133,8 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
                 replacement=budget.copy(image)
                 if debug_reference:debug_reference.release()
                 debug_reference=replacement;debug_reference_frame={**frame,'scroll_offset_px':offset,'coordinate_status':'confirmed'}
-        logger.info('frame=%s action=%s accepted=%s delta=%s offset=%s method=%s stability=%s static_method=%s static_matches=%s',frame['frame_id'],action['kind'],
-                    result['accepted'],result['delta_px'],outcome['scroll_offset_px'],outcome['motion_method'],stability['reason'],stability.get('static_method'),stability.get('static_matches'))
+        logger.info('frame=%s action=%s accepted=%s delta=%s offset=%s method=%s stability=%s static_method=%s static_matches=%s events=%s',frame['frame_id'],action['kind'],
+                    result['accepted'],result['delta_px'],outcome['scroll_offset_px'],outcome['motion_method'],stability['reason'],stability.get('static_method'),stability.get('static_matches'),action.get('events',0))
         if result.get('feature_rejection_reason'):
             logger.info('feature_rejected frame=%s reason=%s total=%s overlap=%s ratio=%s',frame['frame_id'],
                 result['feature_rejection_reason'],result.get('feature_matches_total'),result.get('feature_matches_overlap'),result.get('feature_inlier_ratio'))

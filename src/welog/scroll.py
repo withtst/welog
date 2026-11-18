@@ -19,7 +19,9 @@ class ScrollPlanner:
         # Keep a margin against acceleration and partial movement near boundaries.
         conservative_rate = max(self.recent_rates) * 1.25
         desired = max(1, math.floor(viewport_height * self.target_ratio / conservative_rate))
-        growth_limit = max(1, math.ceil(self.events * 1.6))
+        # A media guard can override the planned batch to one event. Growing
+        # from an unexecuted plan accumulates a hidden burst on guard exit.
+        growth_limit = max(1, math.ceil(sent_events * 1.6))
         self.events = min(self.max_events, growth_limit, desired)
 
     def recover(self) -> None:
