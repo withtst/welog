@@ -12,7 +12,7 @@ from .frame_pool import ImageBudget
 from .models import AlignmentConfig,AlignmentResult,CaptureConfig,Rect
 from .pipeline import OcrWorker
 from .recognition import RapidOcrAdapter
-from .scroll import ScrollPlanner,ScrollCalibration
+from .scroll import ScrollPlanner,ScrollCalibration,retained_anchor_count
 from .session import MemorySession
 from .stability import LayoutStabilityDetector
 
@@ -73,6 +73,7 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
     status,reason='needs_attention','not_started'
     planner=ScrollPlanner(min(config.target_step_ratio,(1-alignment.min_overlap_ratio)*.9),config.max_scroll_events)
     calibration=ScrollCalibration();media_dominated=False;last_motion_method=None
+    planning_eligible=False;planning_boxes=[]
     sign=1 if config.direction=='down' else -1
     stationary=0;motion_observed=False;last_action={'kind':'initial'};diagnostic_save_error=None
     events_enabled=config.debug_save_images and config.debug_image_policy=='events'
@@ -100,6 +101,7 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
     def attempt(action):
         nonlocal accepted,rejected,offset,reference,last_action
         nonlocal media_dominated,last_motion_method
+        nonlocal planning_eligible,planning_boxes
         nonlocal debug_reference,debug_reference_frame,last_attempt_image,last_attempt_frame,last_attempt_accepted
         last_action=action;stability={}
         last_attempt_image=None;last_attempt_frame=None;last_attempt_accepted=False
@@ -123,6 +125,8 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
         if result['accepted']:
             accepted+=1;offset=outcome['scroll_offset_px'];reference=frame['frame_id']
             media_dominated=outcome.get('media_dominated',False)
+            planning_eligible=outcome.get('media_guard_eligible',False)
+            planning_boxes=outcome.get('motion_anchor_boxes',[])
             last_motion_method=outcome['motion_method']
         else:rejected+=1
         if events_enabled:
@@ -159,14 +163,21 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
         attempt({'kind':'initial'})
         while has_capacity():
             if config.max_frames==0 and stationary:wait_at_boundary()
-            events=1 if media_dominated else planner.events
+            forecast=calibration.planning_upper(planner.events)
+            if forecast is None:forecast=session.last_height*planner.target_ratio
+            forecast=min(session.last_height-1,forecast)
+            retained=retained_anchor_count(planning_boxes,session.last_height,config.direction,forecast)
+            anchor_risk=planning_eligible and retained<2
+            guarded=media_dominated or anchor_risk
+            events=1 if guarded else planner.events
             last_action={'kind':'scroll','events':events,'event_units':sign*config.initial_wheel_units,
                          'wheel_units':sign*config.initial_wheel_units*events}
-            if media_dominated:
-                last_action['scroll_guard']='media_dominated'
-                bounds=calibration.bounds(config.direction,session.last_height)
-                if bounds is not None:last_action['motion_bounds']=bounds
-                logger.info('media_scroll_guard events=%s calibrated=%s bounds=%s',events,bounds is not None,bounds)
+            bounds=calibration.batch_bounds(events,config.direction,session.last_height,alignment.min_overlap_ratio)
+            if bounds is not None:last_action['motion_bounds']=bounds
+            if planning_eligible:last_action['anchor_forecast']={'step_upper_px':forecast,'retained':retained,'available':len(planning_boxes)}
+            if guarded:
+                last_action['scroll_guard']='media_dominated' if media_dominated else 'media_anchor_exit'
+                logger.info('media_scroll_guard events=%s calibrated=%s bounds=%s reason=%s retained=%s',events,bounds is not None,bounds,last_action['scroll_guard'],retained)
             for index in range(events):
                 if stopped():raise KeyboardInterrupt
                 source.scroll(sign*config.initial_wheel_units)

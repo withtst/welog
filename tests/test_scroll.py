@@ -8,7 +8,7 @@ from welog.archive import read_jsonl
 from welog.controller import run_capture
 from welog.demo import make_scene
 from welog.models import CaptureConfig
-from welog.scroll import ScrollPlanner
+from welog.scroll import ScrollPlanner,ScrollCalibration,retained_anchor_count
 from welog.replay import run_replay
 
 
@@ -22,6 +22,31 @@ def test_event_planner_leaves_overlap_margin_and_restarts_after_recovery():
     assert planner.events == 6
     planner.recover()
     assert planner.events == 1
+
+
+def test_command_bounds_use_only_independent_samples_of_the_same_batch():
+    calibration=ScrollCalibration()
+    for delta in [-201,-205]:calibration.observe(delta,3,'text')
+    assert calibration.batch_bounds(3,'up',663) is None
+    calibration.observe(-197,3,'text')
+    bound=calibration.batch_bounds(3,'up',663)
+    assert bound['minimum']==-265 and bound['maximum']==0 and bound['events']==3
+    assert calibration.batch_bounds(3,'down',663)['maximum']==265
+    assert calibration.batch_bounds(4,'up',663) is None
+    calibration.observe(-9,3,'text')  # Partial movement must remain in the range.
+    calibration.observe(-350,3,'bounded_layout')  # No self-training.
+    assert calibration.batch_bounds(3,'up',663)['minimum']==-265
+    calibration.observe(-480,3,'text')
+    assert calibration.batch_bounds(3,'up',663) is None
+
+
+def test_reference_anchors_are_checked_in_the_directional_retained_overlap():
+    bottom=[(70,548,95,565),(70,602,95,620)]
+    top=[(70,43,95,60),(70,99,95,116)]
+    assert retained_anchor_count(bottom,663,'up',265)==0
+    assert retained_anchor_count(bottom,663,'down',265)==2
+    assert retained_anchor_count(top,663,'down',265)==0
+    assert retained_anchor_count(top,663,'up',265)==2
 
 
 def test_overridden_single_events_do_not_accumulate_an_unexecuted_batch():

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import threading
 import json
+from collections import Counter
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -68,6 +69,7 @@ class FrameProcessor:
         self.boundary=BoundaryBuffer(budget)
         self.previous_partial=False
         self.media_guard=False
+        self.media_risk=False
         manifest=json.loads((output/'manifest.json').read_text(encoding='utf-8')) if (output/'manifest.json').exists() else {}
         self.capture_reference=datetime.fromisoformat(manifest['created_at'].replace('Z','+00:00')) if manifest.get('created_at') else None
 
@@ -95,12 +97,18 @@ class FrameProcessor:
                 anchors=[line for b in bubbles if b.kind=='text' for line in b.lines
                          if not line.notice_removed and line.box[1]>2 and line.box[3]<image.shape[0]-2]
                 result,reference,method=self.motion.accept(image,frame_id,anchors,direction,tuple(masks)+overlay_masks,motion_bounds)
-                media_guard=len(anchors)<2 and sum(b.kind in {'image','unknown'} for b in bubbles)>=2 and (bool(masks) or self.media_guard)
+                counts=Counter(line.text for line in anchors if line.score>=.7)
+                planning_anchors=[line for line in anchors if line.score>=.7 and len(line.text.strip())>=2 and counts[line.text]==1]
+                # Animation risk and the decision to slow down are separate:
+                # two visible lines can both leave the next overlap.
+                media_risk=sum(b.kind in {'image','unknown'} for b in bubbles)>=2 and (bool(masks) or self.media_risk)
+                media_guard=media_risk and len(planning_anchors)<2
                 repair_error=None
                 seam_calls=0
                 message_ids={}
                 if result.accepted:
                     self.media_guard=media_guard
+                    self.media_risk=media_risk
                     offset=self.motion.offset-self.config.origin_y_px
                     timestamp_reference=datetime.fromisoformat(captured_at.replace('Z','+00:00')) if captured_at else self.capture_reference
                     observe_markers(self.store.connection,labels,offset,image.shape[1],frame_id,timestamp_reference)
@@ -121,6 +129,8 @@ class FrameProcessor:
                     self.previous_partial=partial
                 return {'alignment':result.to_dict(),'reference_id':reference,'motion_method':method,
                         'media_dominated':media_guard,
+                        'media_guard_eligible':media_risk,
+                        'motion_anchor_boxes':[list(line.box) for line in planning_anchors],
                         'scroll_offset_px':self.motion.offset if result.accepted else None,
                         'motion_overlay_masks':[box.to_dict() for box in overlay_masks],
                         'observations':[b.to_dict() for b in bubbles],

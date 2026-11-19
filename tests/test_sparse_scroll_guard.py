@@ -86,39 +86,53 @@ def test_partial_startup_steps_do_not_disable_an_upper_bound():
     assert calibration.bounds('up',663) is None
 
 
-def test_accelerated_startup_then_pure_animation_reaches_boundary(tmp_path):
+@pytest.mark.parametrize('direction',['up','down'])
+def test_accelerated_startup_then_pure_animation_reaches_boundary(tmp_path,direction):
     from welog.recognition import TextLine
     class Source(AnimatedConversation):
         def __init__(self):
             super().__init__('up');self.count=0
-            for y,text in [(1900,'alpha'),(2050,'beta')]:
+            self.starts.remove(1717);self.world[1717:1753,833:869]=250
+            self.texts=[(1710,'alpha'),(1766,'beta')]
+            if direction=='down':
+                self.world=self.world[::-1].copy();self.world[:,833:869]=250
+                self.starts=[len(self.world)-y-132 for y in self.starts]
+                self.texts=[(len(self.world)-y-36,text) for y,text in self.texts]
+                avatar=np.random.default_rng(126).integers(0,256,(36,36,3),dtype=np.uint8)
+                for y in self.starts:self.world[y:y+36,833:869]=avatar
+                self.position=0
+            for y,text in self.texts:
                 self.world[y:y+36,65:265]=238
                 cv2.putText(self.world,text,(75,y+26),cv2.FONT_HERSHEY_SIMPLEX,.5,(20,20,20),1)
         def scroll(self,units):
             self.inputs.append(units)
             steps=[37,52,52,75,75,75,75]
             delta=steps[self.count] if self.count<len(steps) else 67
-            self.count+=1;self.position=max(0,self.position-delta)
+            self.count+=1;self.position=max(0,min(self.end,self.position+(delta if direction=='down' else -delta)))
     source=Source()
     class Backend:
         def recognize(self,image):
             if len(image)!=672:return []
             return [TextLine(text,(75,y+10-source.position,180,y+28-source.position),.99)
-                    for y,text in [(1900,'alpha'),(2050,'beta')]
+                    for y,text in source.texts
                     if 2<y+10-source.position and y+28-source.position<670]
-    result=run_capture(source,tmp_path/'capture',config=CaptureConfig(max_frames=0,direction='up',
+    result=run_capture(source,tmp_path/'capture',config=CaptureConfig(max_frames=0,direction=direction,
         sample_interval_s=.001,stable_samples=3,stable_timeout_s=3,settle_delay_s=0,
         scroll_event_interval_s=0,boundary_wait_s=0),ocr_backend=Backend())
     decisions=read_jsonl(tmp_path/'capture/alignments.jsonl');frames=read_jsonl(tmp_path/'capture/frames.jsonl')
     assert result['status']=='boundary_reached',result
-    assert [r['alignment']['delta_px'] for r in decisions[:4]]==[0,-37,-104,-300]
-    assert frames[4]['action']['events']==1 and frames[4]['action']['motion_bounds']['minimum']==-121
-    assert decisions[4]['motion_method']=='bounded_layout'
-    assert result['final_scroll_offset_px']==-1628 and result['rejected']==0
-    assert result['image_memory_remaining_bytes']==0 and all(s<0 for s in source.inputs)
+    sign=1 if direction=='down' else -1
+    assert [r['alignment']['delta_px'] for r in decisions[:4]]==[0,37*sign,104*sign,300*sign]
+    bounds=frames[4]['action']['motion_bounds']
+    assert frames[4]['action']['events']==1 and max(abs(bounds['minimum']),abs(bounds['maximum']))==121
+    assert frames[4]['action']['scroll_guard']=='media_anchor_exit'
+    assert frames[4]['action']['anchor_forecast']['available']==2 and frames[4]['action']['anchor_forecast']['retained']==0
+    assert any(d['motion_method']=='bounded_layout' for d in decisions)
+    assert result['final_scroll_offset_px']==1628*sign and result['rejected']==0
+    assert result['image_memory_remaining_bytes']==0 and all(s<0 if direction=='up' else s>0 for s in source.inputs)
     rows=read_jsonl(tmp_path/'capture/messages.jsonl')
     assert [r['global_top_px'] for r in rows]==sorted(r['global_top_px'] for r in rows)
-    assert [r['text'] for r in rows if r['type']=='text']==['alpha','beta']
+    assert [r['text'] for r in rows if r['type']=='text']==[text for _,text in sorted(source.texts)]
     assert not list(tmp_path.rglob('*.png'))
 
 
@@ -141,6 +155,14 @@ def test_period_shorter_than_upper_bound_and_out_of_range_nonperiodic_motion_fai
     images,valid=pair(-50)
     assert not estimate_edge_layout(*images,*valid,OverlapAligner(),'up',{'minimum':-30,'maximum':0}).accepted
     assert not estimate_edge_layout(*images,*valid,OverlapAligner(),'down',{'minimum':0,'maximum':30}).accepted
+
+
+def test_multi_event_bound_keeps_periodic_aliases_unconfirmed():
+    calibration=ScrollCalibration()
+    for delta in [-201,-205,-197]:calibration.observe(delta,3,'text')
+    images,valid=pair(-205)
+    result=estimate_edge_layout(*images,*valid,OverlapAligner(),'up',calibration.batch_bounds(3,'up',672))
+    assert not result.accepted and result.reason.startswith('ambiguous')
 
 
 def test_replay_preserves_bounds_and_does_not_count_diagnostic_frame(tmp_path):
@@ -180,6 +202,37 @@ def test_frozen_animation_phase_keeps_media_guard(tmp_path):
     frames=read_jsonl(output/'frames.jsonl')
     assert frames[-1]['action']['stability']['reason']=='static'
     assert frames[-1]['action']['scroll_guard']=='media_dominated'
+
+
+def test_frozen_media_risk_survives_two_text_anchors_near_the_leaving_edge(tmp_path):
+    from welog.recognition import TextLine
+    source=AnimatedConversation('up');positions=[(2160,'alpha'),(2220,'beta')]
+    for y,text in positions:
+        source.world[y:y+36,65:265]=238
+        cv2.putText(source.world,text,(75,y+26),cv2.FONT_HERSHEY_SIMPLEX,.5,(20,20,20),1)
+    original=source.read;reads=0;cached=None;cached_position=None
+    def read():
+        nonlocal reads,cached,cached_position
+        reads+=1
+        if reads<=3 or cached_position!=source.position:
+            cached=original();cached_position=source.position
+        return cached.copy()
+    def scroll(units):source.inputs.append(units);source.position=max(0,source.position-37)
+    source.read=read;source.scroll=scroll
+    class Backend:
+        def recognize(self,image):
+            if len(image)!=672:return []
+            return [TextLine(text,(75,y+10-source.position,180,y+28-source.position),.99) for y,text in positions
+                    if 2<y+10-source.position and y+28-source.position<670]
+    result=run_capture(source,tmp_path/'capture',config=CaptureConfig(max_frames=3,direction='up',
+        stable_samples=3,stable_timeout_s=3,sample_interval_s=.001,settle_delay_s=0,scroll_event_interval_s=0),ocr_backend=Backend())
+    decisions=read_jsonl(tmp_path/'capture/alignments.jsonl');frames=read_jsonl(tmp_path/'capture/frames.jsonl')
+    assert result['accepted']==3 and result['rejected']==0 and result['final_scroll_offset_px']==-74
+    assert frames[1]['action']['stability']['reason']=='static'
+    assert decisions[1]['media_guard_eligible'] and not decisions[1]['media_dominated']
+    assert len(decisions[1]['motion_anchor_boxes'])==2
+    assert frames[2]['action']['scroll_guard']=='media_anchor_exit' and frames[2]['action']['events']==1
+    assert result['image_memory_remaining_bytes']==0 and not list(tmp_path.rglob('*.png'))
 
 
 @pytest.mark.parametrize('direction',['up','down'])

@@ -38,11 +38,30 @@ class ScrollCalibration:
     """
     def __init__(self):
         self.rates = deque(maxlen=8)
+        self.batches = {}
 
     def observe(self, delta_px, events, method):
         if events < 1 or not delta_px or method == 'bounded_layout':
             return
         self.rates.append(abs(delta_px) / events)
+        self.batches.setdefault(events,deque(maxlen=8)).append(abs(delta_px))
+
+    def planning_upper(self,events):
+        """Forecast only: fewer samples may slow capture, never authorize a match."""
+        samples=self.batches.get(events,())
+        if events>1 and len(samples)>=3:return math.ceil(max(samples)*1.25+8)
+        return math.ceil(max(self.rates)*1.5+8)*events if self.rates else None
+
+    def batch_bounds(self,events,direction,height,min_overlap_ratio=.25):
+        if events==1:return self.bounds(direction,height)
+        samples=self.batches.get(events,())
+        if len(samples)<3:return None
+        maximum=math.ceil(max(samples)*1.25+8)
+        if maximum>height*(1-min_overlap_ratio):return None
+        return {'minimum':-maximum if direction=='up' else 0,
+                'maximum':maximum if direction=='down' else 0,
+                'samples':len(samples),'events':events,'max_observed_delta':max(samples),
+                'basis':'verified_scrolls_same_batch'}
 
     def bounds(self, direction, height):
         if len(self.rates) < 3 or min(self.rates) <= 0:
@@ -57,3 +76,9 @@ class ScrollCalibration:
                 'maximum': maximum if direction == 'down' else 0,
                 'samples': len(self.rates), 'max_observed_rate': max(self.rates),
                 'basis': 'verified_scrolls_single_event'}
+
+
+def retained_anchor_count(boxes,height,direction,step,margin=8):
+    """Count reference lines that will remain fully inside the next overlap."""
+    if direction=='up':return sum(box[3]+margin<=height-step for box in boxes)
+    return sum(box[1]-margin>=step for box in boxes)
