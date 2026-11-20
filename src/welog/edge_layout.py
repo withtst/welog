@@ -115,8 +115,10 @@ def _estimate_scale(old,current,old_valid,new_valid,aligner,direction,motion_bou
         if not any(abs(delta-other)<=2 for other in centers):centers.append(delta)
     if not centers:
         failed.reason='edge_layout_repetitive_anchors' if repetitive else 'edge_layout_no_anchors';return failed
-    if len(centers)>24:
-        failed.reason='edge_layout_too_many_candidates';return failed
+    # Candidate count is bounded by native viewport height, not evidence
+    # quality. Common glyphs can propose many offsets; validate every one so
+    # neither a low-ranked real match nor a competing translation is hidden.
+    failed.candidates=len(centers)
     accepted=[];needs_bounds=False
     joint=old_valid&new_valid
     for delta in centers:
@@ -151,5 +153,5 @@ def _estimate_scale(old,current,old_valid,new_valid,aligner,direction,motion_bou
         if needs_bounds:failed.reason='edge_layout_needs_motion_bounds'
         return failed
     if max(r.delta_px for r in accepted)-min(r.delta_px for r in accepted)>2:
-        return AlignmentResult(False,'ambiguous_edge_layout')
+        return AlignmentResult(False,'ambiguous_edge_layout',candidates=len(centers))
     return max(accepted,key=lambda r:r.inliers)
