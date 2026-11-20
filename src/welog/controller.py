@@ -53,6 +53,7 @@ def wait_for_stable(source,config,alignment,stop_requested=None,diagnostics=None
         temporal=[]
         if config.debug_save_images and config.debug_image_policy=='events' and budget is not None:
             metrics['temporal_media_regions']=[list(boxes) for boxes in list(detector.media_history)[-3:]]
+            metrics['temporal_overlay_regions']=[[box.to_dict() for box in boxes] for boxes in list(detector.overlay_history)[-3:]]
             try:
                 for item in list(detector.history)[-3:]:temporal.append(budget.copy(item))
             except Exception:
@@ -62,6 +63,7 @@ def wait_for_stable(source,config,alignment,stop_requested=None,diagnostics=None
     finally:
         detector.history.clear()
         detector.media_history.clear()
+        detector.overlay_history.clear()
         if workspace:workspace.release()
 
 
@@ -109,7 +111,7 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
         frame=capture_frame(image,{**action,'stability':stability})
         if events_enabled:last_attempt_image=image;last_attempt_frame=frame
         lease=budget.copy(image)
-        future=worker.submit(lease,frame['frame_id'],tuple(Rect(**b) for b in stability.get('dynamic_masks',[])),config.direction,frame['captured_at'],action.get('motion_bounds'))
+        future=worker.submit(lease,frame['frame_id'],tuple(Rect(**b) for b in stability.get('dynamic_masks',[])+stability.get('overlay_masks',[])),config.direction,frame['captured_at'],action.get('motion_bounds'))
         # Only one unverified transition is allowed: this wait supplies backpressure.
         # The model owns the lease until it finishes, even after a stop request.
         stop_latched=False

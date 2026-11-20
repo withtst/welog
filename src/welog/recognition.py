@@ -141,6 +141,9 @@ def extend_media_components(image, regions, text_boxes=()):
 
 def detect_bubbles(bgr: np.ndarray, *, include_small_edge_media: bool = False) -> list[Bubble]:
     """Light-theme private-chat baseline. Keep long and viewport-clipped bodies."""
+    from .text_rules import visual_notice_layers,suppress_visual_notice
+    notice,_=visual_notice_layers(bgr)
+    bgr=suppress_visual_notice(bgr,notice)
     h, w = bgr.shape[:2]
     values = bgr.astype(np.int16)
     margin=max(1,min(24,int(w*.03)))

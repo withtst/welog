@@ -24,6 +24,7 @@ class StabilityResult:
     media_supported_ratio: float = 0.0
     static_method: str = 'templates'
     outside_media_pixels: int = 0
+    overlay_masks: list[Rect] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -40,26 +41,35 @@ class LayoutStabilityDetector:
         self.max_media_dynamic_ratio=max_media_dynamic_ratio
         self.history: deque[np.ndarray] = deque(maxlen=samples)
         self.media_history=deque(maxlen=samples)
+        self.overlay_history=deque(maxlen=samples)
 
-    def observe(self, image: np.ndarray, *, media_regions=None) -> StabilityResult:
+    def observe(self, image: np.ndarray, *, media_regions=None, overlay_regions=()) -> StabilityResult:
         current = gray(image).copy()
         if self.history and self.history[-1].shape != current.shape:
             self.history.clear()
             self.media_history.clear()
+            self.overlay_history.clear()
         self.history.append(current)
+        from .text_rules import visual_notice_layers,suppress_visual_notice
+        segment,notices=visual_notice_layers(image)
+        notices=tuple(notices)+tuple(overlay_regions)
+        self.overlay_history.append(notices)
+        working=suppress_visual_notice(image,segment if image.ndim==3 else notices)
         from .recognition import detect_bubbles,achromatic_media_regions,extend_media_components
-        regions=([b.box for b in detect_bubbles(image,include_small_edge_media=True) if b.kind=='image']
-                 if image.ndim==3 else achromatic_media_regions(image,include_small_edge_media=True))
+        regions=([b.box for b in detect_bubbles(working,include_small_edge_media=True) if b.kind=='image']
+                 if image.ndim==3 else achromatic_media_regions(working,include_small_edge_media=True))
         # Offline gray temporal samples retain their original RGB layout hints.
         # Re-detect gray silhouettes as well, so missed hints can be corrected.
         if media_regions is not None:regions.extend(tuple(box) for box in media_regions)
-        if image.ndim==2:regions=extend_media_components(image,regions)
+        if image.ndim==2:regions=extend_media_components(working,regions)
         self.media_history.append(regions)
+        overlays=list(dict.fromkeys(box for boxes in self.overlay_history for box in boxes))
         if len(self.history) < self.samples:
-            return StabilityResult(False, "collecting_samples", len(self.history))
+            return StabilityResult(False, "collecting_samples", len(self.history),overlay_masks=overlays)
         reference = self.history[0]
         valid = np.ones(reference.shape, dtype=bool)
-        for box in self.alignment.masks:
+        base_masks=self.alignment.masks+tuple(overlays)
+        for box in base_masks:
             valid[max(0, box.y):box.bottom, max(0, box.x):box.right] = False
         if not valid.any():
             return StabilityResult(False, "no_visible_area", len(self.history))
@@ -67,7 +77,7 @@ class LayoutStabilityDetector:
         differences = [np.abs(item.astype(np.int16) - reference.astype(np.int16))
                        for item in list(self.history)[1:]]
         if all(np.array_equal(reference[valid], item[valid]) for item in list(self.history)[1:]):
-            return StabilityResult(True, "static", len(self.history))
+            return StabilityResult(True, "static", len(self.history),overlay_masks=overlays)
         changed = np.logical_or.reduce([difference > 10 for difference in differences]) & valid
         height, width = reference.shape
         tile = 32
@@ -90,7 +100,7 @@ class LayoutStabilityDetector:
                     area += int(valid[y:box.bottom, run_start:box.right].sum())
                     run_start = None
         ratio = area / int(valid.sum())
-        result = StabilityResult(False, "widespread_motion", len(self.history), ratio, dynamic_masks=masks)
+        result = StabilityResult(False, "widespread_motion", len(self.history), ratio, dynamic_masks=masks,overlay_masks=overlays)
         media_aware=ratio>self.max_dynamic_ratio
         media_boxes=[]
         supported=np.zeros(reference.shape,dtype=bool)
@@ -112,13 +122,13 @@ class LayoutStabilityDetector:
         # be reclassified as a local animation, even when only sparse text moves.
         # A panning GIF can itself have coherent motion. For the larger, media-
         # supported policy, test page motion outside media instead of treating it as page motion.
-        raw_aligner = OverlapAligner(replace(self.alignment,masks=self.alignment.masks+tuple(media_boxes))) if media_local else OverlapAligner(self.alignment)
+        raw_aligner = OverlapAligner(replace(self.alignment,masks=base_masks+(tuple(media_boxes) if media_local else ())))
         for item in list(self.history)[1:]:
             movement = raw_aligner.estimate(reference, item, direction="both")
             if movement.accepted and movement.delta_px != 0:
                 result.reason = "page_still_scrolling"
                 return result
-        aligner = OverlapAligner(replace(self.alignment, masks=self.alignment.masks + tuple(masks)))
+        aligner = OverlapAligner(replace(self.alignment, masks=base_masks + tuple(masks)))
         inliers = []
         for item in list(self.history)[1:]:
             stationary = aligner.estimate(reference, item, direction="both")

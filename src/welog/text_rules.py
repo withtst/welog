@@ -49,6 +49,78 @@ def notice_region_masks(lines,width,height):
     return tuple(boxes)
 
 
+def _mask_rectangles(mask,x0,y0):
+    """Lossless row runs, preserving visible colored/black message fragments."""
+    import numpy as np
+    from .models import Rect
+    active={};result=[]
+    for y,row in enumerate(mask):
+        edges=np.flatnonzero(np.diff(np.pad(row.astype(np.int8),(1,1))))
+        runs=set(zip(edges[::2],edges[1::2]));following={}
+        for a,b in runs:
+            start,height=active.pop((a,b),(y,0));following[(a,b)]=(start,height+1)
+        for (a,b),(start,height) in active.items():result.append(Rect(x0+int(a),y0+start,int(b-a),height))
+        active=following
+    for (a,b),(start,height) in active.items():result.append(Rect(x0+int(a),y0+start,int(b-a),height))
+    return tuple(result)
+
+
+def visual_notice_layers(image):
+    """Separate a pale, teal-ink floating notice from overlapping message art.
+
+    Return segmentation masks and narrower evidence masks. Blank white pixels
+    need no evidence mask; colored fills and black message text stay visible.
+    """
+    import cv2
+    import numpy as np
+    if image.ndim!=3:return (),()
+    h,w=image.shape[:2];left=int(w*.75)
+    stripe=image[:,left:].astype(np.int16)
+    teal=(stripe[:,:,1]-stripe[:,:,2]>30)&(stripe[:,:,0]-stripe[:,:,2]>15)&(stripe[:,:,1]>100)
+    joined=cv2.morphologyEx(teal.astype(np.uint8),cv2.MORPH_CLOSE,np.ones((1,11),np.uint8))
+    contours,_=cv2.findContours(joined,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+    segment=[];evidence=[]
+    gray=cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
+    background=float(np.median(np.concatenate([gray[:,:20].ravel(),gray[:,-20:].ravel()])))
+    for contour in contours:
+        x,y,bw,bh=cv2.boundingRect(contour);x+=left
+        if bw<40 or bh<6 or bh>36 or bw<bh*3 or bw>w*.4 or x+bw<w*.94:continue
+        if not (y+bh<h*.18 or y>h*.82):continue
+        px=max(18,int(bh*1.5));py=max(20,int(bh*1.5))
+        a,b,c,d=max(0,x-px),max(0,y-py),min(w,x+bw+px),min(h,y+bh+py)
+        values=image[b:d,a:c].astype(np.int16)
+        light=(values.min(2)>=210)&(values.max(2)-values.min(2)<=14)
+        ink=(values[:,:,1]-values[:,:,2]>12)&(values[:,:,0]-values[:,:,2]>8)&(values[:,:,1]>100)
+        strong=(values[:,:,1]-values[:,:,2]>30)&(values[:,:,0]-values[:,:,2]>15)&(values[:,:,1]>100)
+        ink |= cv2.dilate(strong.astype(np.uint8),np.ones((3,3),np.uint8)).astype(bool)
+        inside=(light|ink)[y-b:y-b+bh,x-a:x-a+bw]
+        if inside.mean()<.8:continue
+        # Preserve ordinary gray chat panels in the content lane. The floating
+        # layer crosses into the avatar lane; removing its pale/shadow pixels
+        # there breaks contours joined to a sticker without erasing body text.
+        outside_lane=np.arange(a,c)[None,:]>=int(w*.94)
+        segment_light=light&((values.min(2)>=242)|outside_lane)
+        from .models import Rect
+        ink_box=Rect(max(0,x-2),max(0,y-2),min(w,x+bw+2)-max(0,x-2),min(h,y+bh+2)-max(0,y-2))
+        segment.extend(_mask_rectangles(segment_light,a,b));segment.append(ink_box)
+        shadow=light&(gray[b:d,a:c]<background-1)
+        evidence.extend(_mask_rectangles(shadow,a,b));evidence.append(ink_box)
+    return tuple(dict.fromkeys(segment)),tuple(dict.fromkeys(evidence))
+
+
+def suppress_visual_notice(image,masks):
+    """Segmentation/OCR working copy only; never changes a captured source image."""
+    import numpy as np
+    if not masks:return image
+    result=image.copy()
+    if image.ndim==2:
+        background=np.median(np.concatenate([image[:,:20].ravel(),image[:,-20:].ravel()]))
+    else:
+        background=np.median(np.concatenate([image[:,:20].reshape(-1,3),image[:,-20:].reshape(-1,3)]),axis=0).astype(np.uint8)
+    for box in masks:result[max(0,box.y):box.bottom,max(0,box.x):box.right]=background
+    return result
+
+
 def clean_lines(lines):
     output = []
     for line in lines:

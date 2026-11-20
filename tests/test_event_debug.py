@@ -105,6 +105,8 @@ def test_timeout_keeps_temporal_samples_without_counting_diagnostic_height(tmp_p
     assert not event['coordinate_eligible']
     samples=[row for row in event['images'] if row['role']=='temporal_sample']
     assert samples and len(samples)<=3
+    current=next(row for row in event['images'] if row['role']=='current')
+    assert len(current['action']['stability']['temporal_overlay_regions'])==len(samples)
     assert result['image_memory_remaining_bytes']==0
 
 

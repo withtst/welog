@@ -34,8 +34,9 @@ class NoticeConversation:
                 pixels[:,:,1]=40;pixels[:,:,2]=240
                 image[a:b,687:819]=pixels
         # Fixed viewport overlay partly covers the top outgoing bubble.
+        image[8:49,764:874]=(image[8:49,764:874].astype(float)*.9+20).astype(np.uint8)
         cv2.rectangle(image,(772,12),(869,36),(250,250,250),-1)
-        cv2.putText(image,'1 new',(779,31),cv2.FONT_HERSHEY_SIMPLEX,.45,(120,180,0),1)
+        cv2.putText(image,'12 new msg',(779,31),cv2.FONT_HERSHEY_SIMPLEX,.42,(120,180,0),1)
         return image
 
     def scroll(self,units):

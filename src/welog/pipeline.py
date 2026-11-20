@@ -16,7 +16,7 @@ from .imageio import gray
 from .message_store import MessageStore
 from .motion import MotionTracker
 from .recognition import assign_lines, detect_bubbles
-from .text_rules import clean_lines,notice_region_masks
+from .text_rules import clean_lines,notice_region_masks,visual_notice_layers
 from .file_cards import mark_candidates
 from .timeline import observe_markers
 
@@ -86,17 +86,19 @@ class FrameProcessor:
             # Credit for explicit temporary conversion/difference buffers. Model/native workspaces are separate.
             with self.budget.reserve(image.nbytes*3):
                 bubbles=detect_bubbles(image)
+                notice_segment,notice_evidence=visual_notice_layers(image)
                 mark_candidates(image,bubbles)
                 ocr_error=None
                 with self.budget.copy(image) as clean:
                     self.mask_media(clean.image,[b.box for b in bubbles if b.kind!='text' and '_file_candidate' not in b.metadata])
+                    self.mask_media(clean.image,[(b.x,b.y,b.right,b.bottom) for b in notice_segment])
                     try:lines=self.backend.recognize(clean.image)
                     except Exception as error:lines=[];ocr_error=type(error).__name__
-                overlay_masks=notice_region_masks(lines,image.shape[1],image.shape[0])
+                overlay_masks=tuple(dict.fromkeys(tuple(notice_evidence)+notice_region_masks(lines,image.shape[1],image.shape[0])))
                 labels=assign_lines(bubbles,lines)
                 anchors=[line for b in bubbles if b.kind=='text' for line in b.lines
                          if not line.notice_removed and line.box[1]>2 and line.box[3]<image.shape[0]-2]
-                result,reference,method=self.motion.accept(image,frame_id,anchors,direction,tuple(masks)+overlay_masks,motion_bounds)
+                result,reference,method=self.motion.accept(image,frame_id,anchors,direction,tuple(dict.fromkeys(tuple(masks)+overlay_masks)),motion_bounds)
                 counts=Counter(line.text for line in anchors if line.score>=.7)
                 planning_anchors=[line for line in anchors if line.score>=.7 and len(line.text.strip())>=2 and counts[line.text]==1]
                 # Animation risk and the decision to slow down are separate:

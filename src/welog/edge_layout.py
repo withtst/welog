@@ -24,13 +24,17 @@ def _static_support(old,current,old_valid,new_valid,delta,aligner,ph,pw=16):
     points=[];tested=0
     for y in range(0,length-ph+1,ph):
         for x in range(0,old.shape[1]-pw+1,pw):
-            if not old_valid[pa+y:pa+y+ph,x:x+pw].all() or not new_valid[pb+y:pb+y+ph,x:x+pw].all():continue
+            keep=old_valid[pa+y:pa+y+ph,x:x+pw]&new_valid[pb+y:pb+y+ph,x:x+pw]
+            if ph>=12 and not keep.all():continue
+            if not keep.all() and (keep.mean()<.75 or keep.sum()<64):continue
             a=old[pa+y:pa+y+ph,x:x+pw];b=current[pb+y:pb+y+ph,x:x+pw]
-            if a.std()<aligner.config.min_texture_std:continue
+            if a[keep].std()<aligner.config.min_texture_std:continue
             if (np.abs(cv2.Laplacian(a,cv2.CV_32F))>25).mean()<.05:continue
             tested+=1
-            if np.abs(a.astype(np.int16)-b.astype(np.int16)).mean()<=2:
-                if float(cv2.matchTemplate(a,b,cv2.TM_CCOEFF_NORMED)[0,0])>=.97:points.append((x,pa+y))
+            aa=a[keep].astype(np.float32);bb=b[keep].astype(np.float32)
+            if np.abs(aa-bb).mean()<=2:
+                aa-=aa.mean();bb-=bb.mean();norm=float(np.linalg.norm(aa)*np.linalg.norm(bb))
+                if norm>0 and float(np.dot(aa,bb)/norm)>=.97:points.append((x,pa+y))
     return points,tested
 
 
