@@ -32,31 +32,18 @@ class CoordinateTracker:
         self.feature_verifier=MotionTracker(ImageBudget(),aligner.config)
 
     def accept(self, image: np.ndarray, frame_id: str, *, direction: str = "down",
-               dynamic_masks: tuple[Rect, ...] = (), motion_bounds=None) -> tuple[AlignmentResult, str | None]:
+               dynamic_masks: tuple[Rect, ...] = (), motion_bounds=None,media_risk=None) -> tuple[AlignmentResult, str | None]:
         previous_id = self.reference_id
         if self.reference is None:
             result = AlignmentResult(True, "origin", delta_px=0.0, overlap_ratio=1.0)
         else:
-            masks = self.aligner.config.masks + self.reference_masks + dynamic_masks
-            aligner = OverlapAligner(replace(self.aligner.config, masks=masks)) if masks else self.aligner
-            result = aligner.estimate(self.reference, image, direction=direction)
-            if not result.accepted and self.reference.shape==image.shape:
-                old_valid=OverlapAligner(replace(self.aligner.config,masks=self.aligner.config.masks+self.reference_masks))._valid_mask(image.shape[:2])
-                new_valid=OverlapAligner(replace(self.aligner.config,masks=self.aligner.config.masks+dynamic_masks))._valid_mask(image.shape[:2])
-                feature=self.feature_verifier.features(gray(self.reference),gray(image),aligner._valid_mask(image.shape[:2]),aligner,direction,old_valid,new_valid)
-                if feature.accepted:result=feature
-                else:
-                    from .edge_layout import estimate_edge_layout,layout_media_regions,without_media
-                    edge=estimate_edge_layout(gray(self.reference),gray(image),without_media(old_valid,self.layout_regions),
-                        without_media(new_valid,layout_media_regions(image)),aligner,direction)
-                    if edge.accepted:result=edge
-                    else:
-                        result.edge_rejection_reason=edge.reason
-                        if motion_bounds is not None:
-                            bounded=estimate_edge_layout(gray(self.reference),gray(image),without_media(old_valid,self.layout_regions),
-                                without_media(new_valid,layout_media_regions(image)),aligner,direction,motion_bounds)
-                            if bounded.accepted:result=bounded
-                            else:result.edge_rejection_reason=bounded.reason
+            if self.reference.shape!=image.shape:result=AlignmentResult(False,'layout_size_changed')
+            else:
+                from .edge_layout import layout_media_regions
+                regions=layout_media_regions(image)
+                if media_risk is None:media_risk=bool(dynamic_masks or self.reference_masks) and bool(regions or self.layout_regions)
+                result,_=self.feature_verifier.visual(gray(self.reference),gray(image),self.reference_masks,dynamic_masks,
+                    self.layout_regions,regions,direction,motion_bounds,media_risk)
         if result.accepted:
             from .edge_layout import layout_media_regions
             self.scroll_offset_px += result.delta_px or 0.0
@@ -95,9 +82,20 @@ def run_replay(
     truth_origin = None
     origin_initialized = False
     stopped = False
+    verified_bounds={};pending_command=None
     for frame in frames:
         image = read_image(images / frame["image"])
         action = dict(frame.get("action") or {})
+        kind=action.get('kind')
+        if kind=='scroll':
+            events=action.get('events',0);unit=action.get('event_units')
+            pending_command=(events,unit,normal_direction) if events>0 and unit is not None else None
+        elif kind not in {'retry'}:pending_command=None
+        command=pending_command if kind in {'scroll','retry'} else None
+        effective_bounds=action.get('motion_bounds') if command is not None or kind in {'scroll','retry'} else None
+        if effective_bounds is None and command in verified_bounds:
+            effective_bounds=dict(verified_bounds[command]);action['motion_bounds']=effective_bounds
+            action['motion_bounds_source']='last_verified_same_command'
         exclusion = source_exclusion(metadata, frame, decisions)
         frame_direction = "both" if action.get("kind") == "recovery" else normal_direction
         search_direction = None if exclusion else frame_direction
@@ -110,9 +108,13 @@ def run_replay(
             result = AlignmentResult(False, "source_unconfirmed")
             reference = tracker.reference_id
         else:
-            masks = tuple(Rect(**box) for box in action.get("stability", {}).get("dynamic_masks", [])+decisions.get(frame['frame_id'],{}).get('motion_overlay_masks',[]))
+            stability=action.get('stability',{})
+            masks = tuple(Rect(**box) for box in stability.get('dynamic_masks',[])+stability.get('overlay_masks',[])+decisions.get(frame['frame_id'],{}).get('motion_overlay_masks',[]))
             result, reference = tracker.accept(image, captured["frame_id"], direction=frame_direction, dynamic_masks=masks,
-                motion_bounds=action.get('motion_bounds') if action.get('kind') in {'scroll','retry'} else None)
+                motion_bounds=effective_bounds,
+                media_risk=decisions.get(frame['frame_id'],{}).get('registration_media_risk'))
+            if result.accepted and effective_bounds is not None and command is not None:
+                verified_bounds[command]=dict(effective_bounds)
         elapsed = (time.perf_counter() - start) * 1000
         record = archive.evaluate(captured, result, reference_id=reference, cumulative_px=tracker.scroll_offset_px)
         truth = frame.get("true_scroll_px")

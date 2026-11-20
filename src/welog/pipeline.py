@@ -86,6 +86,7 @@ class FrameProcessor:
             # Credit for explicit temporary conversion/difference buffers. Model/native workspaces are separate.
             with self.budget.reserve(image.nbytes*3):
                 bubbles=detect_bubbles(image)
+                raw_media_count=sum(b.kind=='image' for b in bubbles)
                 notice_segment,notice_evidence=visual_notice_layers(image)
                 mark_candidates(image,bubbles)
                 ocr_error=None
@@ -98,13 +99,15 @@ class FrameProcessor:
                 labels=assign_lines(bubbles,lines)
                 anchors=[line for b in bubbles if b.kind=='text' for line in b.lines
                          if not line.notice_removed and line.box[1]>2 and line.box[3]<image.shape[0]-2]
-                result,reference,method=self.motion.accept(image,frame_id,anchors,direction,tuple(dict.fromkeys(tuple(masks)+overlay_masks)),motion_bounds)
                 counts=Counter(line.text for line in anchors if line.score>=.7)
                 planning_anchors=[line for line in anchors if line.score>=.7 and len(line.text.strip())>=2 and counts[line.text]==1]
                 # Animation risk and the decision to slow down are separate:
                 # two visible lines can both leave the next overlap.
                 media_risk=sum(b.kind in {'image','unknown'} for b in bubbles)>=2 and (bool(masks) or self.media_risk)
                 media_guard=media_risk and len(planning_anchors)<2
+                registration_risk=media_risk or (raw_media_count>0 and len(planning_anchors)<2)
+                result,reference,method=self.motion.accept(image,frame_id,anchors,direction,
+                    tuple(dict.fromkeys(tuple(masks)+overlay_masks)),motion_bounds,media_risk=registration_risk)
                 repair_error=None
                 seam_calls=0
                 message_ids={}
@@ -132,6 +135,7 @@ class FrameProcessor:
                 return {'alignment':result.to_dict(),'reference_id':reference,'motion_method':method,
                         'media_dominated':media_guard,
                         'media_guard_eligible':media_risk,
+                        'registration_media_risk':registration_risk,
                         'motion_anchor_boxes':[list(line.box) for line in planning_anchors],
                         'scroll_offset_px':self.motion.offset if result.accepted else None,
                         'motion_overlay_masks':[box.to_dict() for box in overlay_masks],

@@ -85,9 +85,9 @@ def _estimate_scale(old,current,old_valid,new_valid,aligner,direction,motion_bou
             _,x,y=item
             if any(abs(x-px)<pw and abs(y-py)<ph for _,px,py in chosen):continue
             chosen.append(item)
-            if len(chosen)==12:break
+            if len(chosen)==24:break
         seeds.extend(chosen)
-    votes={}
+    votes={};repetitive=0
     for _,x,y in seeds:
         y0,y1=max(0,y+low),min(h-ph,y+high)
         x0,x1=max(0,x-1),min(w-pw,x+1)
@@ -98,19 +98,23 @@ def _estimate_scale(old,current,old_valid,new_valid,aligner,direction,motion_bou
         integral=cv2.integral(invalid)
         blocked=integral[ph:,pw:]-integral[:-ph,pw:]-integral[ph:,:-pw]+integral[:-ph,:-pw]>0
         scores[blocked]=-1
+        local=[]
         for _ in range(8):
             _,score,_,point=cv2.minMaxLoc(scores)
             if score<.97:break
             bx,by=point;delta=y0+by-y
-            votes[delta]=votes.get(delta,0)+1
+            local.append(delta)
             scores[max(0,by-2):by+3,:]=-1
         if float(scores.max())>=.97:
-            failed.reason='edge_layout_repetitive_anchors';return failed
+            # One textureless border/repeated word must not veto independent
+            # anchors. Do not keep the truncated votes from this weak seed.
+            repetitive+=1;continue
+        for delta in local:votes[delta]=votes.get(delta,0)+1
     centers=[]
     for delta in sorted(votes,key=lambda d:votes[d],reverse=True):
         if not any(abs(delta-other)<=2 for other in centers):centers.append(delta)
     if not centers:
-        failed.reason='edge_layout_no_anchors';return failed
+        failed.reason='edge_layout_repetitive_anchors' if repetitive else 'edge_layout_no_anchors';return failed
     if len(centers)>24:
         failed.reason='edge_layout_too_many_candidates';return failed
     accepted=[];needs_bounds=False
@@ -129,12 +133,14 @@ def _estimate_scale(old,current,old_valid,new_valid,aligner,direction,motion_bou
             if len(robust)<6 or len(robust)/max(1,total)<.85 or max(np.ptp(np.array(robust),axis=0))<48:
                 failed.reason='edge_layout_insufficient_large_support';continue
         rows=sorted({y for _,y in points})
-        clusters=1+sum(b-a>24 for a,b in zip(rows,rows[1:]))
+        starts=[rows[0]]+[b for a,b in zip(rows,rows[1:]) if b-a>24]
+        clusters=len(starts)
         broad=min(spread)>=48
         # Narrow layouts need measured scroll bounds and several independent
         # avatar rows. Multiple translations inside those bounds still fail.
-        narrow=motion_bounds is not None and spread[0]>=16 and spread[1]>=48 and clusters>=3
-        if motion_bounds is None and spread[0]>=16 and spread[1]>=48 and clusters>=3:
+        tight_pair=motion_bounds is not None and clusters==2 and motion_bounds['maximum']-motion_bounds['minimum']<min(np.diff(starts))
+        narrow=motion_bounds is not None and spread[0]>=16 and spread[1]>=48 and (clusters>=3 or tight_pair)
+        if motion_bounds is None and spread[0]>=16 and spread[1]>=48 and clusters>=2:
             needs_bounds=True
         if not broad and not narrow:
             failed.reason='edge_layout_narrow_support';continue
