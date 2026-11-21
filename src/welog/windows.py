@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import re
 import sys
 from ctypes import wintypes
 from typing import Any
@@ -19,7 +20,23 @@ class DesktopError(RuntimeError):
     pass
 
 class BackgroundTargetUnavailable(DesktopError):pass
-class BackgroundTargetChanged(DesktopError):pass
+class BackgroundTargetChanged(DesktopError):
+    def __init__(self,message,*,code='target_changed',details=None):
+        super().__init__(message)
+        self.code=code
+        self.details=details or {}
+
+
+def background_title_key(title):
+    """Only the known app name plus an unread badge is a mutable caption.
+
+    Other captions remain exact, including conversation names with numbers.
+    The caller also requires the original WeChat executable and bound PID.
+    """
+    badge=r'(?:\([0-9]+\+?\)|（[0-9]+\+?）|\[[0-9]+\+?\])'
+    base=re.sub(r'^'+badge+r'\s*','',title.strip(),count=1)
+    base=re.sub(r'\s*'+badge+r'$','',base,count=1)
+    return base.casefold() if base.casefold() in {'微信','wechat','weixin'} else title
 class BackgroundScrollRejected(DesktopError):pass
 
 
@@ -239,10 +256,19 @@ class WindowsDesktop:
             raise BackgroundTargetUnavailable('Background target is missing, hidden or minimized')
         pid=wintypes.DWORD()
         self.api.GetWindowThreadProcessId(target.hwnd,ctypes.byref(pid))
-        if pid.value!=target.pid or self.title(target.hwnd)!=target.title:
-            raise BackgroundTargetChanged('Background window identity changed')
+        if pid.value!=target.pid:
+            raise BackgroundTargetChanged('Background window identity changed',code='window_pid_changed',
+                details={'expected_pid':target.pid,'observed_pid':pid.value})
+        title=self.title(target.hwnd)
+        same_title=title==target.title or (target.executable.casefold() in {'weixin.exe','wechat.exe'}
+            and background_title_key(title)==background_title_key(target.title))
+        if not same_title:
+            raise BackgroundTargetChanged('Background window caption changed',code='window_title_changed',
+                details={'expected_title_length':len(target.title),'observed_title_length':len(title)})
         client=self.client_rect(target.hwnd)
-        if client!=target.client:raise BackgroundTargetChanged('Background window geometry or DPI changed; recalibrate')
+        if client!=target.client:
+            raise BackgroundTargetChanged('Background window geometry or DPI changed; recalibrate',code='client_geometry_changed',
+                details={'expected_client':target.client.to_dict(),'observed_client':client.to_dict()})
         return client
 
     def capture_bounds(self, hwnd: int) -> Rect:
@@ -279,9 +305,12 @@ class WindowsDesktop:
         api=self.api
         api.IsChild.argtypes=[wintypes.HWND,wintypes.HWND];api.IsChild.restype=wintypes.BOOL
         if not api.IsWindow(child) or not api.IsWindowVisible(child) or (child!=target.hwnd and not api.IsChild(target.hwnd,child)):
-            raise BackgroundTargetChanged('Background chat control was replaced or hidden')
+            raise BackgroundTargetChanged('Background chat control was replaced or hidden',code='scroll_control_changed',
+                details={'child_hwnd':child})
         pid=wintypes.DWORD();api.GetWindowThreadProcessId(child,ctypes.byref(pid))
-        if pid.value!=target.pid:raise BackgroundTargetChanged('Background chat control identity changed')
+        if pid.value!=target.pid:
+            raise BackgroundTargetChanged('Background chat control identity changed',code='scroll_control_pid_changed',
+                details={'child_hwnd':child,'expected_pid':target.pid,'observed_pid':pid.value})
         api.PostMessageW.argtypes=[wintypes.HWND,wintypes.UINT,wintypes.WPARAM,wintypes.LPARAM]
         api.PostMessageW.restype=wintypes.BOOL
         x=target.client.x+roi.x+roi.width//2;y=target.client.y+roi.y+roi.height//2

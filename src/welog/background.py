@@ -104,7 +104,7 @@ class BackgroundSource:
             current=gray(guard)
             if self.guard_reference is None:self.guard_reference=current.copy()
             elif float((np.abs(current.astype(np.int16)-self.guard_reference.astype(np.int16))>25).mean())>.025:
-                raise BackgroundTargetChanged('Conversation guard changed')
+                raise BackgroundTargetChanged('Conversation guard changed',code='conversation_guard_changed')
         return image
 
     def scroll(self,units):

@@ -82,6 +82,7 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
     debug_reference=None;debug_reference_frame=None;diagnostic_leases=[]
     last_attempt_image=None;last_attempt_frame=None
     last_attempt_accepted=False
+    source_error=None
 
     def stopped():
         return bool((stop_requested and stop_requested()) or (getattr(source,'interrupted',lambda:False)()))
@@ -220,6 +221,19 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
         status,reason='needs_attention',('ocr_backend_failed' if str(error).startswith('ocr_backend_failed:') else type(error).__name__)
         logger.error('memory_capture_error type=%s',type(error).__name__)
         if session is None:raise
+        from .windows import BackgroundTargetChanged
+        if isinstance(error,BackgroundTargetChanged):
+            evidence='not_available'
+            if last_attempt_image is not None:
+                evidence='last_confirmed_frame' if last_attempt_accepted else 'last_attempt_only'
+            elif debug_reference is not None:evidence='last_confirmed_frame'
+            source_error={'code':error.code,'details':error.details,
+                          'image_evidence':evidence}
+            logger.error('background_target_changed code=%s details=%s',error.code,error.details)
+            session.append('diagnostics.jsonl',{'kind':'source_error','frame_id':None,
+                'reasons':['capture_error',reason,error.code],'source_error':source_error,
+                'reference_frame_id':reference,'attempted_action':last_action,
+                'coordinate_eligible':False,'images':[]})
         if isinstance(error,StableTimeout) and error.latest is not None:
             diagnostic_leases=error.temporal_frames
             try:frame=capture_frame(error.latest,{'kind':'unstable_diagnostic','attempted_action':last_action,'stability':error.diagnostics})
@@ -243,13 +257,16 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
                         session.append('diagnostics.jsonl',{'frame_id':frame['frame_id'],'reasons':['diagnostic_write_failed'],
                             'image_save_error':diagnostic_save_error})
             rejected+=1
-        elif events_enabled:
+        elif events_enabled and (last_attempt_image is not None or debug_reference is not None):
             try:
-                image=last_attempt_image
+                fallback=last_attempt_image is None
+                image=debug_reference.image if fallback else last_attempt_image
+                error_frame=debug_reference_frame if fallback else last_attempt_frame
+                eligible=fallback or last_attempt_accepted
                 with budget.reserve(image.nbytes*2 if image is not None else 0):
-                    session.retain_event(last_attempt_frame,image,['capture_error',reason],
-                        reference=(debug_reference_frame,debug_reference.image) if debug_reference else None,coordinate_eligible=last_attempt_accepted,
-                        scroll_offset_px=offset if last_attempt_accepted else None)
+                    session.retain_event(error_frame,image,['capture_error',reason],
+                        reference=(debug_reference_frame,debug_reference.image) if debug_reference else None,coordinate_eligible=eligible,
+                        scroll_offset_px=offset if eligible else None)
             except Exception as save_error:
                 diagnostic_save_error=type(save_error).__name__
                 session.append('diagnostics.jsonl',{'frame_id':last_attempt_frame['frame_id'] if last_attempt_frame else None,
@@ -273,6 +290,7 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
                          'boundary_reached':status in {'boundary_reached','visible_end_candidate'},
                          'boundary':('top' if config.direction=='up' else 'bottom') if status in {'boundary_reached','visible_end_candidate'} else None}
                 if worker:
+                    if source_error is not None:summary['source_error']=source_error
                     counts=worker.finish(summary);summary.update(counts)
                 session.finish(status,**{k:v for k,v in summary.items() if k!='status'})
                 logger.info('memory_capture_end status=%s reason=%s accepted=%s rejected=%s offset=%s',status,reason,accepted,rejected,offset)

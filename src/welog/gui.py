@@ -694,7 +694,14 @@ class CaptureWindow(QMainWindow):
         elif detail=='BackgroundFrameStale':detail='窗口停止提供新画面，已暂停；未抢夺焦点。'
         elif detail=='BackgroundCaptureUnavailable':detail='窗口采集不可用，已暂停；未切换到前台采集。'
         elif detail=='BackgroundTargetUnavailable':detail='目标窗口已隐藏、关闭或最小化，采集暂停。'
-        elif detail=='BackgroundTargetChanged':detail='窗口布局、聊天控件或会话校验发生变化，请重新校准。'
+        elif detail=='BackgroundTargetChanged':
+            detail={'window_pid_changed':'窗口所属进程发生变化，请重新选择窗口。',
+                    'window_title_changed':'窗口标题发生了未读数量以外的变化，请确认会话并重新校准。',
+                    'client_geometry_changed':'窗口位置或客户区尺寸发生变化，请重新校准。',
+                    'scroll_control_changed':'原聊天滚动控件已隐藏或更换，请重新选择聊天区域。',
+                    'scroll_control_pid_changed':'聊天滚动控件所属进程发生变化，请重新选择窗口。',
+                    'conversation_guard_changed':'会话校验区域发生变化，请确认会话并重新校准。'
+                   }.get(result.get('source_error',{}).get('code'),'窗口布局、聊天控件或会话校验发生变化，请重新校准。')
         elif detail=='BackgroundScrollRejected':detail='后台滚动消息被系统拒绝，已暂停；未使用全局输入。'
         if result.get('diagnostic_image_save_error') and result.get('reason')!='DebugImageLimit':
             detail+='\n部分诊断图未能保存，请查看诊断索引中的 image_save_error。'

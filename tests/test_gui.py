@@ -227,3 +227,17 @@ def test_background_calibration_uses_window_source_and_never_activates_target(ap
     window.calibrate()
     assert calls==['window_source','closed'] and window.stage=='countdown'
     window.cancel();window.hide()
+
+@pytest.mark.parametrize('code,expected',[
+    ('window_title_changed','未读数量以外'),('window_pid_changed','窗口所属进程'),
+    ('client_geometry_changed','窗口位置或客户区尺寸'),('scroll_control_changed','滚动控件已隐藏或更换'),
+    ('scroll_control_pid_changed','滚动控件所属进程'),('conversation_guard_changed','会话校验区域'),
+    (None,'窗口布局、聊天控件或会话校验')])
+def test_background_target_failure_shows_specific_reason_offscreen(app,tmp_path,code,expected):
+    window=CaptureWindow(SimpleNamespace(),tmp_path)
+    result={'status':'needs_attention','reason':'BackgroundTargetChanged','accepted':3,
+            'final_scroll_offset_px':-141,'report':str(tmp_path/'report.html'),'output':str(tmp_path)}
+    if code:result['source_error']={'code':code,'details':{}}
+    window.capture_finished(result)
+    assert expected in window.status.text()
+    window.hide()

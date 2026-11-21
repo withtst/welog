@@ -45,3 +45,13 @@
 - WGC/模型原生工作区与采集缓冲仍不计入受管图像额度；图像单槽和 OCR 背压保持有界，默认截图不落盘，调试模式及其配额仍需显式开启。
 
 参考：[微软 HWND 窗口捕获接口](https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.capture.interop/nf-windows-graphics-capture-interop-igraphicscaptureiteminterop-createforwindow)、[窗口消息投递](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-postmessagew)、[windows-capture Python 接口](https://github.com/NiiightmareXD/windows-capture/blob/main/windows-capture-python/README-Python.md)。项目使用其公开 API，没有复制第三方实现代码。
+
+## 标题未读徽标与目标变化诊断
+
+后台采集仍绑定同一 HWND、PID、客户区几何和滚动子控件。仅对已锁定进程为 weixin.exe/wechat.exe、基础标题为“微信”/“WeChat”/“Weixin”的情况，将应用名首尾的数字未读徽标视为可变标题，例如“微信”→“微信 (25)”→“微信”。数字、括号或新消息正文出现在其他标题中时，不进行这种归一化。可选会话图像守卫继续独立检查，不因未读数变化被关闭。
+
+其他标题、进程、位置/尺寸和控件变化仍暂停采集。异常通过 source_error.code 区分 window_pid_changed、window_title_changed、client_geometry_changed、scroll_control_changed、scroll_control_pid_changed、conversation_guard_changed；诊断日志、事件索引和报告摘要保存该原因，界面显示对应中文说明。诊断仅记录标题长度和数值几何/标识，不记录变化后的标题文本或第三方异常正文。
+
+窗口状态检查失败时，并未获取该时刻的目标截图；此类事件标明 image_evidence=last_confirmed_frame（或 last_attempt_only；无可用图时为 not_available），不能把保留的上一张成功图当成触发异常时的画面。没有新图时不会伪造失败帧或推进累计高度。旧日志只保存 BackgroundTargetChanged 类名时，不能事后从旧截图断言是哪项身份检查变化。
+
+模拟 WGC/Win32 回归在每次读取时修改未读数，验证上下方向、定向滚动、消息顺序和累计位置；另验证真实身份变化仍停止、原因留存、无截图默认策略和离屏界面提示。这些测试不访问真实窗口。

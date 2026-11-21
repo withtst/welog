@@ -137,7 +137,8 @@ def test_guard_changes_pause_and_no_external_escape_is_read():
     source,capture,clock,_=make_source(Rect(0,0,100,10))
     buffer=np.full((240,320,4),120,np.uint8);capture.emit(buffer);source.read()
     buffer[:10,:100,:3]=250;capture.emit(buffer)
-    with pytest.raises(DesktopError,match='guard'):source.read()
+    with pytest.raises(DesktopError,match='guard') as error:source.read()
+    assert error.value.code=='conversation_guard_changed'
     source.close()
 
 
@@ -160,3 +161,132 @@ def test_stream_creation_failure_has_no_capture_fallback():
     with pytest.raises(BackgroundCaptureUnavailable):WgcStream(10,lambda frame:frame,factory=factory)
     with pytest.raises(ValueError):source_factory('unknown')
     with pytest.raises(ValueError):CaptureConfig(capture_backend='unknown')
+
+@pytest.mark.parametrize('initial,current',[
+    ('微信','微信 (25)'),('微信 (1)','微信 (26)'),('微信 (25)','微信'),
+    ('微信','(25)微信'),('微信','微信（99+）'),('WeChat','WeChat [99+]'),
+    ('Weixin (1)','Weixin (2)')])
+def test_wechat_unread_badges_are_mutable_captions_not_target_identity(initial,current):
+    from dataclasses import replace
+    d,target,_=desktop();target=replace(target,title=initial,executable='Weixin.exe')
+    d.title=lambda _:current
+    assert d.check_background(target)==target.client
+    d.post_background_scroll(target,11,Rect(0,0,200,200),-120)
+
+
+@pytest.mark.parametrize('initial,current,executable',[
+    ('微信','different','weixin.exe'),('微信','微信 - private conversation','weixin.exe'),
+    ('fixture (1)','fixture (2)','weixin.exe'),('微信','微信 (1)','fixture.exe'),
+    ('微信','微信 (private text)','weixin.exe')])
+def test_other_caption_changes_are_rejected_with_content_free_diagnostics(initial,current,executable):
+    from dataclasses import replace
+    from welog.windows import BackgroundTargetChanged
+    d,target,_=desktop();target=replace(target,title=initial,executable=executable);d.title=lambda _:current
+    with pytest.raises(BackgroundTargetChanged) as error:d.check_background(target)
+    assert error.value.code=='window_title_changed'
+    assert error.value.details=={'expected_title_length':len(initial),'observed_title_length':len(current)}
+    assert current not in str(error.value.details)
+
+
+@pytest.mark.parametrize('change,code',[('pid','window_pid_changed'),('geometry','client_geometry_changed'),
+                                       ('child','scroll_control_changed'),('child_pid','scroll_control_pid_changed')])
+def test_target_failures_have_distinct_machine_readable_reasons(change,code):
+    from welog.windows import BackgroundTargetChanged
+    d,target,_=desktop()
+    if change=='geometry':d.client_rect=lambda _:Rect(100,120,321,240)
+    if change=='child':d.api.IsChild=Function(lambda *args:False)
+    if change in {'pid','child_pid'}:
+        def pid(hwnd,out):out._obj.value=999 if change=='pid' or hwnd==11 else 123;return 1
+        d.api.GetWindowThreadProcessId=pid
+    with pytest.raises(BackgroundTargetChanged) as error:d.post_background_scroll(target,11,Rect(0,0,200,200),120)
+    assert error.value.code==code
+
+
+@pytest.mark.parametrize('direction',['up','down'])
+def test_full_background_capture_continues_while_unread_caption_changes(tmp_path,direction):
+    from dataclasses import replace
+    from welog.demo import make_scene
+    from welog.controller import run_capture
+    from welog.archive import read_jsonl
+    d,target,messages=desktop();target=replace(target,title='微信',executable='weixin.exe',client=Rect(100,120,640,720))
+    d.describe_window=lambda _:target;d.client_rect=lambda _:target.client
+    d.capture_bounds=lambda _:target.client;d.background_scroll_target=lambda *a:11
+    state={'caption':'微信'};d.title=lambda _:state['caption'];captures=[]
+    def factory(**kwargs):c=Capture(**kwargs);captures.append(c);return c
+    def stream(hwnd,extract):return WgcStream(hwnd,extract,factory=factory)
+    class Source(BackgroundSource):
+        position=300 if direction=='up' else 0
+        reads=0
+        def read(self):
+            self.reads+=1;state['caption']=f'微信 ({self.reads})'
+            captures[0].emit(world[self.position:self.position+720])
+            return super().read()
+        def scroll(self,units):
+            super().scroll(units);self.position+=50 if units>0 else -50
+    world=make_scene(1500,640,seed=62);source=Source(d,10,Rect(0,0,640,720),stream_factory=stream)
+    result=run_capture(source,tmp_path/'capture',config=CaptureConfig(capture_backend='background',direction=direction,
+        max_frames=7,max_scroll_events=1,sample_interval_s=.001,stable_samples=2,settle_delay_s=0,scroll_event_interval_s=0))
+    assert result['accepted']==7 and result['rejected']==0 and result['reason']=='max_frames'
+    assert result['final_scroll_offset_px']==(-300 if direction=='up' else 300)
+    assert all(msg[0]==11 for msg in messages) and len(messages)==6 and captures[0].stops==1
+    assert result['image_memory_remaining_bytes']==0 and not list(tmp_path.rglob('*.png'))
+    rows=read_jsonl(tmp_path/'capture/messages.jsonl')
+    assert [r['global_top_px'] for r in rows]==sorted(r['global_top_px'] for r in rows)
+
+
+@pytest.mark.parametrize('code',['window_title_changed','window_pid_changed','client_geometry_changed',
+                               'scroll_control_changed','scroll_control_pid_changed','conversation_guard_changed'])
+@pytest.mark.parametrize('debug',[False,True])
+def test_controller_persists_target_failure_details_without_title_or_false_height(tmp_path,caplog,code,debug):
+    from welog.controller import run_capture
+    from welog.demo import make_scene
+    from welog.archive import read_jsonl
+    from welog.windows import BackgroundTargetChanged
+    class Source:
+        offset=0;calls=0;closed=False
+        def read(self):return world[self.offset:self.offset+720].copy()
+        def scroll(self,units):
+            self.calls+=1
+            if self.calls==2:raise BackgroundTargetChanged('private vendor caption',code=code,
+                details={'expected_title_length':2,'observed_title_length':15})
+            self.offset+=50
+        def close(self):self.closed=True
+    world=make_scene(1500,640,seed=62);source=Source()
+    result=run_capture(source,tmp_path/'capture',config=CaptureConfig(capture_backend='background',debug_save_images=debug,max_frames=5,max_scroll_events=1,
+        stable_samples=2,sample_interval_s=.001,settle_delay_s=0,scroll_event_interval_s=0))
+    assert result['reason']=='BackgroundTargetChanged' and result['source_error']['code']==code
+    assert result['accepted']==2 and result['final_scroll_offset_px']==50 and source.closed
+    events=read_jsonl(tmp_path/'capture/diagnostics.jsonl')
+    event=next(e for e in events if e.get('kind')=='source_error')
+    assert not event['coordinate_eligible'] and event['images']==[]
+    assert event['source_error']['image_evidence']==('last_confirmed_frame' if debug else 'not_available')
+    assert f'background_target_changed code={code}' in caplog.text and 'private vendor caption' not in caplog.text
+    assert result['image_memory_remaining_bytes']==0
+    if not debug:assert not list(tmp_path.rglob('*.png'))
+
+@pytest.mark.parametrize('initial',[True,False])
+def test_read_time_target_failure_retains_only_existing_confirmed_evidence(tmp_path,initial):
+    from welog.controller import run_capture
+    from welog.demo import make_scene
+    from welog.archive import read_jsonl
+    from welog.windows import BackgroundTargetChanged
+    class Source:
+        scrolled=False
+        def read(self):
+            if initial or self.scrolled:raise BackgroundTargetChanged('no raw state',code='window_pid_changed')
+            return world.copy()
+        def scroll(self,units):self.scrolled=True
+        def close(self):pass
+    world=make_scene(720,640,seed=62)
+    result=run_capture(Source(),tmp_path/'capture',config=CaptureConfig(capture_backend='background',debug_save_images=True,
+        max_frames=3,stable_samples=2,sample_interval_s=.001,settle_delay_s=0,scroll_event_interval_s=0))
+    assert result['accepted']==(0 if initial else 1) and result['final_scroll_offset_px']==0
+    assert result['source_error']['image_evidence']==('not_available' if initial else 'last_confirmed_frame')
+    assert result['diagnostic_image_save_error'] is None and result['image_memory_remaining_bytes']==0
+    events=read_jsonl(tmp_path/'capture/diagnostics.jsonl')
+    images=[i for e in events for i in e.get('images',[])]
+    if initial:assert not images and not list(tmp_path.rglob('*.png'))
+    else:
+        frames=[i for i in images if i['role'] in {'reference','current'}]
+        assert frames and all(i['frame_id']=='000000' for i in frames)
+        assert [f['frame_id'] for f in read_jsonl(tmp_path/'capture/frames.jsonl')]==['000000']
