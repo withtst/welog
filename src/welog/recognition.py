@@ -165,8 +165,14 @@ def detect_bubbles(bgr: np.ndarray, *, include_small_edge_media: bool = False) -
             if direction == "unknown":
                 continue
             patch = bgr[y:y+bh, x:x+bw]
-            # Very white rectangular content may be an image/card; never export its embedded text as chat.
-            kind = "unknown" if color == "neutral" and np.median(patch) > 251 and bh > 65 else "text"
+            # Sample the connected panel background, not the entire content:
+            # a photograph can occupy most of a white panel and lower its
+            # median enough to masquerade as a gray text bubble.
+            panel_white=color=='neutral' and np.median(patch[mask[y:y+bh,x:x+bw]])>251
+            clipped=y<=1 or y+bh>=h-1
+            color_fraction=float((patch.max(2).astype(np.int16)-patch.min(2)>35).mean()) if panel_white else 0
+            white_content=panel_white and (bh>65 or (clipped and bw>=45 and bh>=16 and color_fraction>=.02))
+            kind = "unknown" if white_content else "text"
             candidates.append(Bubble((x,y,x+bw,y+bh), direction, kind,
                                      "clipped" if y <= 1 else "visible",
                                      "clipped" if y+bh >= h-1 else "visible"))
