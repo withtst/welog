@@ -69,9 +69,15 @@ class BackgroundSource:
         self.desktop=desktop;self.roi=roi;self.guard=guard;self.stream=None
         self.target=desktop.describe_window(hwnd)
         if self.target is None:raise BackgroundCaptureUnavailable('Target must be visible and not minimized')
-        desktop.check_background(self.target)
-        self.bounds=desktop.capture_bounds(hwnd)
-        self.client=self.target.client
+        # Capture one coherent client/window mapping. Translation never changes
+        # its local crop offset; do not mix independently updated screen origins
+        # in the concurrent WGC callback.
+        for _ in range(3):
+            client=desktop.check_background(self.target)
+            bounds=desktop.capture_bounds(hwnd)
+            if desktop.check_background(self.target)==client:break
+        else:raise BackgroundTargetChanged('Cannot establish a stable client mapping',code='window_mapping_unstable')
+        self.bounds,self.client=bounds,client
         for box in (roi,guard):
             if box and (box.x<0 or box.y<0 or box.right>self.client.width or box.bottom>self.client.height):
                 raise DesktopError('ROI must be inside the client area')

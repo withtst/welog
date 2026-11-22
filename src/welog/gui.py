@@ -278,8 +278,8 @@ class CaptureWorker(QThread):
             from .windows import WindowsDesktop
             from .background import source_factory
             desktop = (self.desktop_factory or WindowsDesktop)()
-            current = desktop.describe_window(self.target.hwnd)
-            if current != self.target:
+            if self.config.capture_backend=='background':desktop.check_background(self.target)
+            elif desktop.describe_window(self.target.hwnd)!=self.target:
                 raise RuntimeError("锁定的窗口已发生变化，请重新选择窗口。")
             source = (self.source_factory or source_factory(self.config.capture_backend))(desktop, self.target.hwnd, self.roi, self.guard)
             result = run_capture(
@@ -575,7 +575,8 @@ class CaptureWindow(QMainWindow):
         from .background import source_factory
         source = None
         try:
-            if self.desktop.describe_window(self.target.hwnd) != self.target:
+            if self.backend.currentData()=='background':self.desktop.check_background(self.target)
+            elif self.desktop.describe_window(self.target.hwnd) != self.target:
                 raise RuntimeError("窗口位置或内容发生变化，请重新选择。")
             if self.backend.currentData()=='foreground':self.desktop.activate(self.target.hwnd)
             source = source_factory(self.backend.currentData())(self.desktop, self.target.hwnd,
@@ -597,7 +598,7 @@ class CaptureWindow(QMainWindow):
                 return
             self.roi, self.guard = dialog.roi, dialog.guard
             self.cached_calibration = RegionCalibration(self.target.executable, self.target.client.width,
-                                                        self.target.client.height, self.roi, self.guard)
+                                                        self.target.client.height, self.roi, self.guard,self.target.dpi)
             self.output_root.mkdir(parents=True, exist_ok=True)
             write_json(self.cache_path, asdict(self.cached_calibration))
             self.begin_countdown()
@@ -697,7 +698,9 @@ class CaptureWindow(QMainWindow):
         elif detail=='BackgroundTargetChanged':
             detail={'window_pid_changed':'窗口所属进程发生变化，请重新选择窗口。',
                     'window_title_changed':'窗口标题发生了未读数量以外的变化，请确认会话并重新校准。',
-                    'client_geometry_changed':'窗口位置或客户区尺寸发生变化，请重新校准。',
+                    'client_geometry_changed':'窗口客户区尺寸发生变化，请重新校准。',
+                    'client_dpi_changed':'窗口DPI发生变化或无法读取，请重新校准。',
+                    'window_mapping_unstable':'窗口持续移动，暂时无法建立裁剪映射，请稍后重试。',
                     'scroll_control_changed':'原聊天滚动控件已隐藏或更换，请重新选择聊天区域。',
                     'scroll_control_pid_changed':'聊天滚动控件所属进程发生变化，请重新选择窗口。',
                     'conversation_guard_changed':'会话校验区域发生变化，请确认会话并重新校准。'

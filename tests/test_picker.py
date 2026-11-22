@@ -50,3 +50,14 @@ def test_calibration_reuse_requires_same_layout_and_contained_nonoverlapping_reg
     assert not saved.matches(dataclasses.replace(target(), client=Rect(30, 40, 1100, 900)))
     assert not dataclasses.replace(saved, roi=Rect(300, 80, 1000, 600)).matches(target())
     assert not dataclasses.replace(saved, guard=Rect(300, 100, 400, 60)).matches(target())
+
+
+def test_calibration_persists_dpi_and_rejects_scale_changes_but_allows_translation():
+    from dataclasses import asdict,replace
+    saved=RegionCalibration('weixin.exe',1200,900,Rect(300,80,880,600),dpi=96)
+    selected=replace(target(),dpi=96)
+    assert saved.matches(replace(selected,client=Rect(-600,-300,1200,900)))
+    assert not saved.matches(replace(selected,dpi=144))
+    assert RegionCalibration.from_dict(asdict(saved))==saved
+    legacy=asdict(saved);legacy.pop('dpi')
+    assert RegionCalibration.from_dict(legacy).dpi is None

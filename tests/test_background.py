@@ -290,3 +290,118 @@ def test_read_time_target_failure_retains_only_existing_confirmed_evidence(tmp_p
         frames=[i for i in images if i['role'] in {'reference','current'}]
         assert frames and all(i['frame_id']=='000000' for i in frames)
         assert [f['frame_id'] for f in read_jsonl(tmp_path/'capture/frames.jsonl')]==['000000']
+
+@pytest.mark.parametrize('origin',[(-600,-300),(700,80),(100,120)])
+def test_background_translation_uses_current_screen_coordinates_without_changing_binding(origin):
+    from dataclasses import replace
+    d,target,messages=desktop();target=replace(target,dpi=96)
+    d.api.GetDpiForWindow=Function(lambda _:96)
+    current=Rect(*origin,320,240);d.client_rect=lambda _:current
+    assert d.check_background(target)==current
+    d.post_background_scroll(target,11,Rect(0,0,200,200),-120)
+    point=messages[0][3]
+    assert (ctypes.c_short(point&0xffff).value,ctypes.c_short(point>>16).value)==(current.x+100,current.y+100)
+    assert target.client==Rect(100,120,320,240)
+
+
+@pytest.mark.parametrize('dpi',[120,144,0])
+def test_dpi_changes_remain_fatal_even_when_client_pixel_dimensions_match(dpi):
+    from dataclasses import replace
+    from welog.windows import BackgroundTargetChanged
+    d,target,messages=desktop();target=replace(target,dpi=96)
+    d.api.GetDpiForWindow=Function(lambda _:dpi)
+    d.client_rect=lambda _:Rect(-600,-300,320,240)
+    with pytest.raises(BackgroundTargetChanged) as error:d.post_background_scroll(target,11,Rect(0,0,200,200),120)
+    assert error.value.code=='client_dpi_changed' and not messages
+    assert error.value.details=={'expected_dpi':96,'observed_dpi':dpi or None}
+
+
+def test_scroll_rechecks_position_after_child_validation_before_posting():
+    d,target,messages=desktop();current=[target.client]
+    d.client_rect=lambda _:current[0]
+    def child(*args):current[0]=Rect(-800,-500,320,240);return True
+    d.api.IsChild=Function(child)
+    d.post_background_scroll(target,11,Rect(0,0,200,200),120)
+    point=messages[0][3]
+    assert (ctypes.c_short(point&0xffff).value,ctypes.c_short(point>>16).value)==(-700,-400)
+
+
+def test_child_lookup_uses_current_origin_after_translation():
+    d,target,_=desktop();d.client_rect=lambda _:Rect(-600,-300,320,240);points=[]
+    def screen(hwnd,point):points.append((point._obj.x,point._obj.y));point._obj.x=20;point._obj.y=20;return True
+    d.api.ScreenToClient=Function(screen)
+    d.api.ChildWindowFromPointEx=Function(lambda parent,*a:11)
+    assert d.background_scroll_target(target,Rect(0,0,200,200))==11
+    assert points==[(-500,-200)]*2
+
+
+def test_initial_mapping_retries_translation_and_then_remains_window_local():
+    d,target,_=desktop();current=[target.client];calls=[];captures=[]
+    d.client_rect=lambda _:current[0];d.background_scroll_target=lambda *a:11
+    def bounds(hwnd):
+        calls.append(hwnd);current[0]=Rect(-600,-300,320,240)
+        return Rect(current[0].x-8,current[0].y-20,336,268)
+    d.capture_bounds=bounds
+    def factory(**kwargs):c=Capture(**kwargs);captures.append(c);return c
+    source=BackgroundSource(d,10,Rect(10,20,200,160),stream_factory=lambda hwnd,extract:WgcStream(hwnd,extract,factory=factory))
+    assert len(calls)==2 and source.client==current[0]
+    image=np.full((268,336,4),77,np.uint8);image[40:200,18:218,:3]=123
+    for position in [Rect(800,900,320,240),Rect(-300,-400,320,240)]:
+        current[0]=position;captures[0].emit(image)
+        assert (source.read()==123).all()
+    source.close()
+
+
+def test_continuous_startup_movement_does_not_start_an_incoherent_stream():
+    from welog.windows import BackgroundTargetChanged
+    d,target,_=desktop();current=[target.client];created=[]
+    d.client_rect=lambda _:current[0]
+    def bounds(hwnd):
+        current[0]=Rect(current[0].x+50,current[0].y,320,240)
+        return Rect(current[0].x-8,current[0].y-20,336,268)
+    d.capture_bounds=bounds
+    with pytest.raises(BackgroundTargetChanged) as error:
+        BackgroundSource(d,10,Rect(0,0,200,160),stream_factory=lambda *a:created.append(True))
+    assert error.value.code=='window_mapping_unstable' and not created
+
+
+@pytest.mark.parametrize('direction',['up','down'])
+@pytest.mark.parametrize('surface',['window','client'])
+def test_full_background_capture_while_target_keeps_moving_has_exact_roi_and_height(tmp_path,direction,surface):
+    from dataclasses import replace
+    from welog.demo import make_scene
+    from welog.controller import run_capture
+    from welog.archive import read_jsonl
+    d,target,messages=desktop();target=replace(target,client=Rect(100,120,640,720),dpi=96)
+    d.describe_window=lambda _:target;current=[target.client];d.client_rect=lambda _:current[0]
+    d.api.GetDpiForWindow=Function(lambda _:96);d.background_scroll_target=lambda *a:11
+    d.capture_bounds=lambda _:Rect(current[0].x-8,current[0].y-20,656,748)
+    captures=[];expected_points=[];world=make_scene(1500,640,seed=76)
+    def factory(**kwargs):c=Capture(**kwargs);captures.append(c);return c
+    class Source(BackgroundSource):
+        position=300 if direction=='up' else 0
+        reads=0
+        def read(self):
+            self.reads+=1;current[0]=Rect(-600 if self.reads%2 else 800,-400 if self.reads%3 else 900,640,720)
+            expected=world[self.position:self.position+720]
+            if surface=='window':
+                buffer=np.full((748,656,3),9,np.uint8);buffer[20:740,8:648]=expected
+            else:buffer=expected
+            captures[0].emit(buffer)
+            result=super().read();assert np.array_equal(result,expected)
+            return result
+        def scroll(self,units):
+            expected_points.append((current[0].x+320,current[0].y+360))
+            super().scroll(units);self.position+=50 if units>0 else -50
+    source=Source(d,10,Rect(0,0,640,720),stream_factory=lambda hwnd,extract:WgcStream(hwnd,extract,factory=factory))
+    initial=source.position;errors=[]
+    result=run_capture(source,tmp_path/'capture',config=CaptureConfig(capture_backend='background',direction=direction,
+        max_frames=7,max_scroll_events=1,stable_samples=2,sample_interval_s=.001,settle_delay_s=0,scroll_event_interval_s=0),
+        progress=lambda row:errors.append(row['scroll_offset_px']-(source.position-initial)) if row['accepted'] else None)
+    assert result['accepted']==7 and result['rejected']==0 and result['reason']=='max_frames'
+    assert result['final_scroll_offset_px']==(-300 if direction=='up' else 300) and errors==[0]*7
+    actual=[(ctypes.c_short(m[3]&0xffff).value,ctypes.c_short(m[3]>>16).value) for m in messages]
+    assert actual==expected_points and len(messages)==6 and all(m[0]==11 for m in messages)
+    assert captures[0].stops==1 and result['image_memory_remaining_bytes']==0 and not list(tmp_path.rglob('*.png'))
+    rows=read_jsonl(tmp_path/'capture/messages.jsonl')
+    assert [r['global_top_px'] for r in rows]==sorted(r['global_top_px'] for r in rows)

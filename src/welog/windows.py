@@ -119,7 +119,14 @@ class WindowsDesktop:
                     executable = os.path.basename(path.value).casefold()
             finally:
                 self.kernel.CloseHandle(handle)
-        return WindowTarget(int(hwnd), pid.value, title, client, executable)
+        return WindowTarget(int(hwnd), pid.value, title, client, executable,self.window_dpi(hwnd))
+
+    def window_dpi(self,hwnd):
+        function=getattr(self.api,'GetDpiForWindow',None)
+        if function is None:return None
+        function.argtypes=[wintypes.HWND];function.restype=wintypes.UINT
+        value=function(hwnd)
+        return int(value) if value else None
 
     def window_at_cursor(self, allowed_executables: set[str] | None = None) -> WindowTarget | None:
         point = wintypes.POINT()
@@ -266,9 +273,14 @@ class WindowsDesktop:
             raise BackgroundTargetChanged('Background window caption changed',code='window_title_changed',
                 details={'expected_title_length':len(target.title),'observed_title_length':len(title)})
         client=self.client_rect(target.hwnd)
-        if client!=target.client:
+        if (client.width,client.height)!=(target.client.width,target.client.height):
             raise BackgroundTargetChanged('Background window geometry or DPI changed; recalibrate',code='client_geometry_changed',
                 details={'expected_client':target.client.to_dict(),'observed_client':client.to_dict()})
+        if target.dpi is not None:
+            dpi=self.window_dpi(target.hwnd)
+            if dpi!=target.dpi:
+                raise BackgroundTargetChanged('Background window DPI changed or unavailable; recalibrate',code='client_dpi_changed',
+                    details={'expected_dpi':target.dpi,'observed_dpi':dpi})
         return client
 
     def capture_bounds(self, hwnd: int) -> Rect:
@@ -282,13 +294,13 @@ class WindowsDesktop:
 
     def background_scroll_target(self, target: WindowTarget, roi: Rect) -> int:
         """Descend only the selected window's child tree, independently of occlusion."""
-        self.check_background(target)
+        client=self.check_background(target)
         api=self.api
         api.ChildWindowFromPointEx.argtypes=[wintypes.HWND,wintypes.POINT,wintypes.UINT]
         api.ChildWindowFromPointEx.restype=wintypes.HWND
         api.ScreenToClient.argtypes=[wintypes.HWND,ctypes.POINTER(wintypes.POINT)]
         api.ScreenToClient.restype=wintypes.BOOL
-        x=target.client.x+roi.x+roi.width//2;y=target.client.y+roi.y+roi.height//2
+        x=client.x+roi.x+roi.width//2;y=client.y+roi.y+roi.height//2
         parent=target.hwnd
         for _ in range(32):
             point=wintypes.POINT(x,y)
@@ -313,7 +325,8 @@ class WindowsDesktop:
                 details={'child_hwnd':child,'expected_pid':target.pid,'observed_pid':pid.value})
         api.PostMessageW.argtypes=[wintypes.HWND,wintypes.UINT,wintypes.WPARAM,wintypes.LPARAM]
         api.PostMessageW.restype=wintypes.BOOL
-        x=target.client.x+roi.x+roi.width//2;y=target.client.y+roi.y+roi.height//2
+        client=self.check_background(target)
+        x=client.x+roi.x+roi.width//2;y=client.y+roi.y+roi.height//2
         if not -32768<=x<=32767 or not -32768<=y<=32767:raise DesktopError('Wheel coordinates exceed Win32 range')
         # Public units are positive DOWN; Win32 wheel delta is positive UP.
         wheel=((-units)&0xffff)<<16;point=(x&0xffff)|((y&0xffff)<<16)

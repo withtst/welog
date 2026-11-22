@@ -207,7 +207,8 @@ def test_background_calibration_uses_window_source_and_never_activates_target(ap
     from welog import gui,background
     calls=[]
     def forbidden(*args):raise AssertionError('Target must not be activated')
-    desktop=SimpleNamespace(activate=forbidden,describe_window=lambda _:target(),escape_pressed=forbidden)
+    desktop=SimpleNamespace(activate=forbidden,describe_window=lambda _:target(),escape_pressed=forbidden,
+                            check_background=lambda selected:selected.client)
     class Source:
         def __init__(self,*args):calls.append('window_source')
         def read(self):return np.full((720,640,3),245,np.uint8)
@@ -230,7 +231,8 @@ def test_background_calibration_uses_window_source_and_never_activates_target(ap
 
 @pytest.mark.parametrize('code,expected',[
     ('window_title_changed','未读数量以外'),('window_pid_changed','窗口所属进程'),
-    ('client_geometry_changed','窗口位置或客户区尺寸'),('scroll_control_changed','滚动控件已隐藏或更换'),
+    ('client_geometry_changed','窗口客户区尺寸'),('scroll_control_changed','滚动控件已隐藏或更换'),
+    ('client_dpi_changed','窗口DPI'),('window_mapping_unstable','窗口持续移动'),
     ('scroll_control_pid_changed','滚动控件所属进程'),('conversation_guard_changed','会话校验区域'),
     (None,'窗口布局、聊天控件或会话校验')])
 def test_background_target_failure_shows_specific_reason_offscreen(app,tmp_path,code,expected):
@@ -241,3 +243,20 @@ def test_background_target_failure_shows_specific_reason_offscreen(app,tmp_path,
     window.capture_finished(result)
     assert expected in window.status.text()
     window.hide()
+
+
+def test_background_worker_accepts_translation_since_lock_using_shared_validation(app,tmp_path):
+    calls=[];results=[];failures=[]
+    locked=target()
+    desktop=SimpleNamespace(check_background=lambda selected:calls.append(selected) or Rect(-600,-300,640,720))
+    scene=make_scene(720,640)
+    class Source:
+        def read(self):return scene.copy()
+        def close(self):pass
+        def scroll(self,units):raise AssertionError('Single-frame test must not scroll')
+    worker=CaptureWorker(locked,Rect(0,0,640,720),None,tmp_path,
+        CaptureConfig(capture_backend='background',max_frames=1,stable_samples=2,sample_interval_s=.001),
+        desktop_factory=lambda:desktop,source_factory=lambda *args:Source())
+    worker.result_ready.connect(results.append);worker.failed.connect(failures.append);worker.run()
+    assert calls==[locked] and not failures and results[0]['accepted']==1
+    assert not list(tmp_path.rglob('*.png'))

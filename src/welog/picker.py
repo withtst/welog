@@ -15,6 +15,7 @@ class WindowTarget:
     title: str
     client: Rect
     executable: str = ""
+    dpi: int | None = None
 
 
 @dataclass(frozen=True)
@@ -24,11 +25,13 @@ class RegionCalibration:
     client_height: int
     roi: Rect
     guard: Rect | None = None
+    dpi: int | None = None
 
     def matches(self, target: WindowTarget) -> bool:
         if (self.executable != target.executable
                 or (self.client_width, self.client_height) != (target.client.width, target.client.height)):
             return False
+        if self.dpi is not None and self.dpi!=target.dpi:return False
         for box in (self.roi, self.guard):
             if box is not None and (box.x < 0 or box.y < 0 or box.right > self.client_width or box.bottom > self.client_height):
                 return False
@@ -41,7 +44,7 @@ class RegionCalibration:
     @classmethod
     def from_dict(cls, value: dict) -> RegionCalibration:
         return cls(value["executable"], value["client_width"], value["client_height"],
-                   Rect(**value["roi"]), Rect(**value["guard"]) if value.get("guard") else None)
+                   Rect(**value["roi"]), Rect(**value["guard"]) if value.get("guard") else None,value.get('dpi'))
 
 
 @dataclass(frozen=True)
