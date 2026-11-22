@@ -23,6 +23,11 @@ class MotionTracker:
         self.layout_regions=()
 
     def accept(self,image,frame_id,lines,direction,masks=(),motion_bounds=None,media_risk=None):
+        from .text_rules import visual_notice_layers
+        # Old journals may contain the former ink/shadow-only notice masks.
+        # Rebuild opaque-surface evidence from pixels before keeping a reference.
+        _,notice_masks=visual_notice_layers(image)
+        masks=tuple(dict.fromkeys(tuple(masks)+notice_masks))
         previous_id=self.reference_id
         regions=None
         if self.previous is None:

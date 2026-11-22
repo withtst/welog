@@ -33,6 +33,9 @@ class CoordinateTracker:
 
     def accept(self, image: np.ndarray, frame_id: str, *, direction: str = "down",
                dynamic_masks: tuple[Rect, ...] = (), motion_bounds=None,media_risk=None) -> tuple[AlignmentResult, str | None]:
+        from .text_rules import visual_notice_layers
+        _,notice_masks=visual_notice_layers(image)
+        dynamic_masks=tuple(dict.fromkeys(tuple(dynamic_masks)+notice_masks))
         previous_id = self.reference_id
         if self.reference is None:
             result = AlignmentResult(True, "origin", delta_px=0.0, overlap_ratio=1.0)

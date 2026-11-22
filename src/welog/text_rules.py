@@ -68,8 +68,9 @@ def _mask_rectangles(mask,x0,y0):
 def visual_notice_layers(image):
     """Separate a pale, teal-ink floating notice from overlapping message art.
 
-    Return segmentation masks and narrower evidence masks. Blank white pixels
-    need no evidence mask; colored fills and black message text stay visible.
+    Return segmentation and evidence masks. Opaque pale pixels may cover
+    informative page content, so exclude them from registration too. Visible
+    colored fills and black message fragments remain available.
     """
     import cv2
     import numpy as np
@@ -104,7 +105,7 @@ def visual_notice_layers(image):
         ink_box=Rect(max(0,x-2),max(0,y-2),min(w,x+bw+2)-max(0,x-2),min(h,y+bh+2)-max(0,y-2))
         segment.extend(_mask_rectangles(segment_light,a,b));segment.append(ink_box)
         shadow=light&(gray[b:d,a:c]<background-1)
-        evidence.extend(_mask_rectangles(shadow,a,b));evidence.append(ink_box)
+        evidence.extend(_mask_rectangles(segment_light|shadow,a,b));evidence.append(ink_box)
     return tuple(dict.fromkeys(segment)),tuple(dict.fromkeys(evidence))
 
 
