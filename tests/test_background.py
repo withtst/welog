@@ -405,3 +405,97 @@ def test_full_background_capture_while_target_keeps_moving_has_exact_roi_and_hei
     assert captures[0].stops==1 and result['image_memory_remaining_bytes']==0 and not list(tmp_path.rglob('*.png'))
     rows=read_jsonl(tmp_path/'capture/messages.jsonl')
     assert [r['global_top_px'] for r in rows]==sorted(r['global_top_px'] for r in rows)
+
+@pytest.mark.parametrize('case', ['read_minimized', 'scroll_hidden', 'closed', 'cancel', 'timeout', 'guard_changed'])
+def test_background_capture_handles_target_loss_without_replaying_posted_wheels(tmp_path, monkeypatch, case):
+    from dataclasses import replace
+    from welog import controller
+    from welog.archive import read_jsonl
+    from welog.demo import make_scene
+
+    d, target, messages = desktop()
+    target = replace(target, client=Rect(100, 120, 640, 744))
+    d.describe_window = lambda _: target
+    d.client_rect = lambda _: target.client
+    d.capture_bounds = lambda _: target.client
+    d.background_scroll_target = lambda *args: 11
+    state = {'availability': 'ready', 'offset': 0, 'stop': False, 'guard': 100}
+    d.api.IsWindow = lambda hwnd: hwnd != 10 or state['availability'] != 'closed'
+    d.api.IsWindowVisible = lambda hwnd: hwnd != 10 or state['availability'] != 'hidden'
+    d.api.IsIconic = lambda hwnd: hwnd == 10 and state['availability'] == 'minimized'
+    scene = make_scene(1300, 640, seed=89)
+    streams = []
+    waiting = []
+
+    class Stream:
+        def __init__(self, hwnd, extract):
+            assert hwnd == 10
+            self.extract = extract
+            self.closed = False
+            streams.append(self)
+
+        def read(self):
+            assert state['availability'] == 'ready' and not self.closed
+            buffer = np.full((744, 640, 3), state['guard'], np.uint8)
+            buffer[24:] = scene[state['offset']:state['offset'] + 720]
+            return self.extract(buffer), 0
+
+        def close(self):
+            assert not self.closed
+            self.closed = True
+
+    def post(hwnd, *args):
+        assert hwnd == 11 and state['availability'] == 'ready'
+        messages.append((hwnd, *args))
+        state['offset'] += 50
+        if case == 'scroll_hidden' and len(messages) == 2:
+            state['availability'] = 'hidden'  # Second event of this batch is still pending.
+        elif case != 'scroll_hidden' and len(messages) == 1:
+            state['availability'] = 'closed' if case == 'closed' else 'minimized'
+        return True
+
+    d.api.PostMessageW = Function(post)
+    source = BackgroundSource(d, 10, Rect(0, 24, 640, 720), Rect(0, 0, 80, 20), stream_factory=Stream)
+
+    def on_wait(code):
+        waiting.append(code)
+        assert len(messages) == (2 if case == 'scroll_hidden' else 1)
+        if case == 'cancel':
+            state['stop'] = True
+        elif case != 'timeout':
+            state['availability'] = 'ready'
+            if case == 'guard_changed':
+                state['guard'] = 220
+
+    if case == 'timeout':
+        monkeypatch.setattr(controller, 'BACKGROUND_RETURN_TIMEOUT_S', .01)
+    output = tmp_path / 'capture'
+    result = controller.run_capture(source, output, config=CaptureConfig(capture_backend='background',
+        max_frames=3, stable_samples=2, sample_interval_s=.001, settle_delay_s=0, scroll_event_interval_s=0),
+        availability_progress=on_wait, stop_requested=lambda: state['stop'])
+    assert result['rejected'] == 0 and result['image_memory_remaining_bytes'] == 0
+    assert all(stream.closed for stream in streams)
+    assert not list(output.rglob('*.png'))
+    if case in {'read_minimized', 'scroll_hidden'}:
+        assert waiting == ['window_minimized' if case == 'read_minimized' else 'window_hidden']
+        assert len(streams) == 2 and len(messages) == 3
+        assert result['reason'] == 'max_frames' and result['accepted'] == 3
+        assert result['final_scroll_offset_px'] == 150
+        alignments = read_jsonl(output / 'alignments.jsonl')
+        assert [row['scroll_offset_px'] for row in alignments] == [0, 50, 150]
+        rows = read_jsonl(output / 'messages.jsonl')
+        positions = [row['global_top_px'] for row in rows]
+        assert positions == sorted(positions)
+    else:
+        assert len(messages) == 1 and result['accepted'] == 1 and result['final_scroll_offset_px'] == 0
+        if case == 'cancel':
+            assert result['reason'] == 'user_interrupt'
+        else:
+            expected = {'closed': 'window_closed', 'timeout': 'window_minimized',
+                        'guard_changed': 'conversation_guard_changed'}[case]
+            assert result['source_error']['code'] == expected
+            assert result['source_error']['phase'] == 'read' and result['source_error']['posted_events'] == 1
+            if case == 'timeout':
+                assert result['source_error']['details']['wait_timed_out'] is True
+            if case == 'closed':
+                assert not waiting and len(streams) == 1

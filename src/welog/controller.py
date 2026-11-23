@@ -15,8 +15,10 @@ from .recognition import RapidOcrAdapter
 from .scroll import ScrollPlanner,ScrollCalibration,retained_anchor_count
 from .session import MemorySession
 from .stability import LayoutStabilityDetector
+from .windows import BackgroundTargetError, BackgroundTargetUnavailable
 
 logger=logging.getLogger('welog.capture')
+BACKGROUND_RETURN_TIMEOUT_S = 30
 
 
 class Source(Protocol):
@@ -67,7 +69,8 @@ def wait_for_stable(source,config,alignment,stop_requested=None,diagnostics=None
         if workspace:workspace.release()
 
 
-def run_capture(source,output,*,config=None,alignment=None,metadata=None,progress=None,stop_requested=None,ocr_backend=None):
+def run_capture(source,output,*,config=None,alignment=None,metadata=None,progress=None,stop_requested=None,ocr_backend=None,
+                availability_progress=None):
     """Memory-only by default; explicit debug mode retains ROI frames for offline analysis."""
     config,alignment=config or CaptureConfig(),alignment or AlignmentConfig()
     budget=ImageBudget(config.image_memory_limit_bytes)
@@ -83,9 +86,35 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
     last_attempt_image=None;last_attempt_frame=None
     last_attempt_accepted=False
     source_error=None
+    source_phase=None
+    posted_events=0
 
     def stopped():
         return bool((stop_requested and stop_requested()) or (getattr(source,'interrupted',lambda:False)()))
+
+    def with_target_available(operation, phase):
+        nonlocal source_phase
+        source_phase = phase
+        deadline = None
+        wait_for_target = getattr(source, 'wait_for_target', None)
+        while True:
+            if stopped():
+                raise KeyboardInterrupt
+            try:
+                result = operation()
+                source_phase = None
+                return result
+            except BackgroundTargetUnavailable as error:
+                if not error.temporary or wait_for_target is None:
+                    raise
+                if deadline is None:
+                    deadline = time.monotonic() + BACKGROUND_RETURN_TIMEOUT_S
+                logger.info('background_target_waiting code=%s phase=%s posted_events=%s',
+                            error.code, phase, posted_events)
+                if availability_progress:
+                    availability_progress(error.code)
+                wait_for_target(error, deadline, stopped)
+                logger.info('background_target_resumed phase=%s posted_events=%s', phase, posted_events)
 
     def wait_at_boundary():
         deadline=time.monotonic()+config.boundary_wait_s
@@ -108,7 +137,8 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
         nonlocal debug_reference,debug_reference_frame,last_attempt_image,last_attempt_frame,last_attempt_accepted
         last_action=action;stability={}
         last_attempt_image=None;last_attempt_frame=None;last_attempt_accepted=False
-        image=wait_for_stable(source,config,alignment,stopped,stability,budget)
+        image=with_target_available(
+            lambda: wait_for_stable(source,config,alignment,stopped,stability,budget), 'read')
         frame=capture_frame(image,{**action,'stability':stability})
         if events_enabled:last_attempt_image=image;last_attempt_frame=frame
         lease=budget.copy(image)
@@ -184,9 +214,12 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
             if guarded:
                 last_action['scroll_guard']='media_dominated' if media_dominated else 'media_anchor_exit'
                 logger.info('media_scroll_guard events=%s calibrated=%s bounds=%s reason=%s retained=%s',events,bounds is not None,bounds,last_action['scroll_guard'],retained)
+            posted_events=0
             for index in range(events):
-                if stopped():raise KeyboardInterrupt
-                source.scroll(sign*config.initial_wheel_units)
+                # Availability errors are raised before PostMessage. Retry
+                # just this event and keep the already dispatched prefix.
+                with_target_available(lambda: source.scroll(sign*config.initial_wheel_units), 'scroll')
+                posted_events+=1
                 if index+1<events:time.sleep(config.scroll_event_interval_s)
             time.sleep(config.settle_delay_s)
             result=attempt(last_action)
@@ -221,15 +254,16 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
         status,reason='needs_attention',('ocr_backend_failed' if str(error).startswith('ocr_backend_failed:') else type(error).__name__)
         logger.error('memory_capture_error type=%s',type(error).__name__)
         if session is None:raise
-        from .windows import BackgroundTargetChanged
-        if isinstance(error,BackgroundTargetChanged):
+        if isinstance(error,BackgroundTargetError):
             evidence='not_available'
             if last_attempt_image is not None:
                 evidence='last_confirmed_frame' if last_attempt_accepted else 'last_attempt_only'
             elif debug_reference is not None:evidence='last_confirmed_frame'
-            source_error={'code':error.code,'details':error.details,
+            source_error={'code':error.code,'details':error.details,'phase':source_phase,'posted_events':posted_events,
                           'image_evidence':evidence}
-            logger.error('background_target_changed code=%s details=%s',error.code,error.details)
+            logger.error('background_target_%s code=%s phase=%s posted_events=%s details=%s',
+                         'unavailable' if isinstance(error,BackgroundTargetUnavailable) else 'changed',
+                         error.code,source_phase,posted_events,error.details)
             session.append('diagnostics.jsonl',{'kind':'source_error','frame_id':None,
                 'reasons':['capture_error',reason,error.code],'source_error':source_error,
                 'reference_frame_id':reference,'attempted_action':last_action,

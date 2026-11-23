@@ -41,7 +41,7 @@
 
 - 当前为 WGC + 定向轮消息；UIA ScrollPattern 尚未实现。
 - 微信是否接受此类后台消息，必须由用户在自己的版本主动验证；失败可选前台兼容模式。
-- 不支持最小化、隐藏、锁屏、改变目标窗口客户区尺寸或DPI、同时操作同一会话；同尺寸同DPI平移可继续采集。
+- 窗口最小化或隐藏期间暂停读取和滚动，等待用户恢复同一窗口。锁屏、改变目标窗口客户区尺寸或DPI、同时操作同一会话仍不受支持。同尺寸同DPI平移可继续采集。
 - WGC/模型原生工作区与采集缓冲仍不计入受管图像额度；图像单槽和 OCR 背压保持有界，默认截图不落盘，调试模式及其配额仍需显式开启。
 
 参考：[微软 HWND 窗口捕获接口](https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.capture.interop/nf-windows-graphics-capture-interop-igraphicscaptureiteminterop-createforwindow)、[窗口消息投递](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-postmessagew)、[windows-capture Python 接口](https://github.com/NiiightmareXD/windows-capture/blob/main/windows-capture-python/README-Python.md)。项目使用其公开 API，没有复制第三方实现代码。
@@ -68,3 +68,9 @@ WGC回调使用初始化时一致的客户区/窗口边框映射，裁剪只依�
 client_geometry_changed现在表示客户区尺寸变化；client_dpi_changed表示DPI变化或无法核实。它们和其他身份/会话保护都保留，不通过移动旧ROI或猜测像素缩放继续采集。移动跨越不同DPI的显示器仍需要重新校准。
 
 模拟回归覆盖正/负屏幕坐标、子控件检查期间移动、初始化映射重试、持续移动时拒绝启动、同像素尺寸下DPI改变、客户区/整窗两种表面，以及上下方向完整采集。窗口平移本身不贡献聊天累计高度，图像预算和默认不落盘策略不变。
+
+## 短暂不可用时恢复采集
+
+后台窗口隐藏或最小化后，采集等待最多 30 秒。界面显示等待状态，停止按钮在等待期间可用。同一窗口恢复可见后，重新核验已绑定目标，重建窗口采集流并取得新画面。可选会话守卫与上一次确认位置继续沿用。读取阶段重新采样稳定性，滚轮阶段只继续发送尚未投递的事件。
+
+窗口关闭或身份变化时结束采集。等待超时、窗口关闭和身份变化的诊断区分具体状态、操作阶段以及当前批次已经投递的滚轮事件数。异常事件只保留已取得的调试证据，累计位置仍来自配准通过的帧。测试使用模拟窗口和图像流，覆盖滚轮批次中途隐藏、采样前最小化、恢复后会话守卫变化、主动停止及超时。

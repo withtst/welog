@@ -19,12 +19,25 @@ from .picker import WindowTarget
 class DesktopError(RuntimeError):
     pass
 
-class BackgroundTargetUnavailable(DesktopError):pass
-class BackgroundTargetChanged(DesktopError):
-    def __init__(self,message,*,code='target_changed',details=None):
+class BackgroundTargetError(DesktopError):
+    default_code = 'target_changed'
+
+    def __init__(self,message,*,code=None,details=None):
         super().__init__(message)
-        self.code=code
+        self.code=code or self.default_code
         self.details=details or {}
+
+
+class BackgroundTargetChanged(BackgroundTargetError):
+    pass
+
+
+class BackgroundTargetUnavailable(BackgroundTargetError):
+    default_code = 'target_unavailable'
+
+    @property
+    def temporary(self):
+        return self.code in {'window_minimized', 'window_hidden'}
 
 
 def background_title_key(title):
@@ -259,13 +272,17 @@ class WindowsDesktop:
 
     def check_background(self, target: WindowTarget) -> Rect:
         """Identity/layout checks only: no focus, cursor, hit-testing or global Escape."""
-        if not self.api.IsWindow(target.hwnd) or not self.api.IsWindowVisible(target.hwnd) or self.api.IsIconic(target.hwnd):
-            raise BackgroundTargetUnavailable('Background target is missing, hidden or minimized')
+        if not self.api.IsWindow(target.hwnd):
+            raise BackgroundTargetUnavailable('Background target no longer exists', code='window_closed')
         pid=wintypes.DWORD()
         self.api.GetWindowThreadProcessId(target.hwnd,ctypes.byref(pid))
         if pid.value!=target.pid:
             raise BackgroundTargetChanged('Background window identity changed',code='window_pid_changed',
                 details={'expected_pid':target.pid,'observed_pid':pid.value})
+        if self.api.IsIconic(target.hwnd):
+            raise BackgroundTargetUnavailable('Background target is minimized', code='window_minimized')
+        if not self.api.IsWindowVisible(target.hwnd):
+            raise BackgroundTargetUnavailable('Background target is hidden', code='window_hidden')
         title=self.title(target.hwnd)
         same_title=title==target.title or (target.executable.casefold() in {'weixin.exe','wechat.exe'}
             and background_title_key(title)==background_title_key(target.title))

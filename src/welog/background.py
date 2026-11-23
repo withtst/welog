@@ -5,7 +5,7 @@ import time
 import numpy as np
 from .imageio import gray
 from .models import Rect
-from .windows import DesktopError,BackgroundTargetChanged
+from .windows import DesktopError, BackgroundTargetChanged, BackgroundTargetUnavailable
 
 
 class BackgroundFrameStale(DesktopError):pass
@@ -69,21 +69,49 @@ class BackgroundSource:
         self.desktop=desktop;self.roi=roi;self.guard=guard;self.stream=None
         self.target=desktop.describe_window(hwnd)
         if self.target is None:raise BackgroundCaptureUnavailable('Target must be visible and not minimized')
-        # Capture one coherent client/window mapping. Translation never changes
-        # its local crop offset; do not mix independently updated screen origins
-        # in the concurrent WGC callback.
-        for _ in range(3):
-            client=desktop.check_background(self.target)
-            bounds=desktop.capture_bounds(hwnd)
-            if desktop.check_background(self.target)==client:break
-        else:raise BackgroundTargetChanged('Cannot establish a stable client mapping',code='window_mapping_unstable')
-        self.bounds,self.client=bounds,client
+        self.stream_factory = stream_factory or WgcStream
+        self.bounds, self.client = self._capture_mapping()
         for box in (roi,guard):
             if box and (box.x<0 or box.y<0 or box.right>self.client.width or box.bottom>self.client.height):
                 raise DesktopError('ROI must be inside the client area')
         self.child=desktop.background_scroll_target(self.target,roi)
         self.guard_reference=None;self.last_refresh=0.
-        self.stream=(stream_factory or WgcStream)(hwnd,self._extract)
+        self.stream=self.stream_factory(hwnd,self._extract)
+
+    def _capture_mapping(self):
+        # Capture one coherent client/window mapping. Translation never changes
+        # its local crop offset; do not mix independently updated screen origins
+        # in the concurrent WGC callback.
+        for _ in range(3):
+            client=self.desktop.check_background(self.target)
+            bounds=self.desktop.capture_bounds(self.target.hwnd)
+            if self.desktop.check_background(self.target)==client:
+                return bounds, client
+        raise BackgroundTargetChanged('Cannot establish a stable client mapping',code='window_mapping_unstable')
+
+    def wait_for_target(self, error, deadline, stopped):
+        """Wait for the same target to return and obtain a fresh guarded frame."""
+        self._close_stream()
+        while time.monotonic() < deadline:
+            if stopped():
+                raise KeyboardInterrupt
+            try:
+                if self.stream is None:
+                    self.bounds, self.client = self._capture_mapping()
+                    self.last_refresh = 0.
+                    self.stream = self.stream_factory(self.target.hwnd, self._extract)
+                if self.read() is not None:
+                    return
+            except BackgroundTargetUnavailable as unavailable:
+                if not unavailable.temporary:
+                    raise
+                error = unavailable
+                self._close_stream()
+            time.sleep(min(.1, max(0., deadline - time.monotonic())))
+        raise BackgroundTargetUnavailable(
+            'Timed out waiting for the background target',
+            code=error.code, details={'wait_timed_out': True},
+        ) from error
 
     def _extract(self,buffer):
         if buffer.ndim!=3 or buffer.shape[2] not in (3,4):raise DesktopError('Invalid WGC frame format')
@@ -118,8 +146,11 @@ class BackgroundSource:
 
     def interrupted(self):return False  # Global Escape belongs to the user's other application.
 
-    def close(self):
+    def _close_stream(self):
         if self.stream:self.stream.close();self.stream=None
+
+    def close(self):
+        self._close_stream()
         self.guard_reference=None
 
 

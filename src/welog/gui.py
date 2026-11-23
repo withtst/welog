@@ -287,6 +287,7 @@ class CaptureWorker(QThread):
                 metadata={"selection": "pointer_hover", "target": asdict(self.target),
                           "roi": self.roi.to_dict(), "guard_roi": self.guard.to_dict() if self.guard else None},
                 progress=self.progress.emit, stop_requested=self.cancel_event.is_set,
+                availability_progress=lambda code: self.progress.emit({'waiting_for_target': code}),
             )
             self.result_ready.emit(result)
         except Exception as error:
@@ -670,6 +671,10 @@ class CaptureWindow(QMainWindow):
             self.fail(str(error))
 
     def capture_progress(self, record: dict) -> None:
+        if waiting := record.get('waiting_for_target'):
+            state = '最小化' if waiting == 'window_minimized' else '隐藏'
+            self.status.setText(f'目标窗口已{state}。请在 30 秒内恢复窗口，采集会自动继续。\n也可点击停止。')
+            return
         stop_hint='点击停止按钮结束' if self.backend.currentData()=='background' else 'Esc 停止'
         self.status.setText(f"已处理 {int(record['frame_id'])+1} 帧 · 累计位移 {record['scroll_offset_px']} px\n{stop_hint}")
 
@@ -694,7 +699,13 @@ class CaptureWindow(QMainWindow):
         elif detail=='DebugImageLimit':detail='调试截图达到存储上限，已停止。'
         elif detail=='BackgroundFrameStale':detail='窗口停止提供新画面，已暂停；未抢夺焦点。'
         elif detail=='BackgroundCaptureUnavailable':detail='窗口采集不可用，已暂停；未切换到前台采集。'
-        elif detail=='BackgroundTargetUnavailable':detail='目标窗口已隐藏、关闭或最小化，采集暂停。'
+        elif detail=='BackgroundTargetUnavailable':
+            error = result.get('source_error', {})
+            detail = {
+                'window_closed': '目标窗口已关闭，采集结束。',
+                'window_hidden': '目标窗口隐藏后未能恢复，采集结束。',
+                'window_minimized': '目标窗口最小化后未能恢复，采集结束。',
+            }.get(error.get('code'), '目标窗口不可用，采集结束。')
         elif detail=='BackgroundTargetChanged':
             detail={'window_pid_changed':'窗口所属进程发生变化，请重新选择窗口。',
                     'window_title_changed':'窗口标题发生了未读数量以外的变化，请确认会话并重新校准。',

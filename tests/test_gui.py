@@ -260,3 +260,13 @@ def test_background_worker_accepts_translation_since_lock_using_shared_validatio
     worker.result_ready.connect(results.append);worker.failed.connect(failures.append);worker.run()
     assert calls==[locked] and not failures and results[0]['accepted']==1
     assert not list(tmp_path.rglob('*.png'))
+
+@pytest.mark.parametrize('code,label', [('window_hidden', '隐藏'), ('window_minimized', '最小化')])
+def test_background_wait_and_timeout_have_distinct_status_messages(app, tmp_path, code, label):
+    window = CaptureWindow(SimpleNamespace(), tmp_path)
+    window.capture_progress({'waiting_for_target': code})
+    assert label in window.status.text() and '30 秒内' in window.status.text()
+    window.capture_finished({'status': 'needs_attention', 'reason': 'BackgroundTargetUnavailable',
+                             'source_error': {'code': code}, 'accepted': 1})
+    assert label in window.status.text() and '采集结束' in window.status.text()
+    window.hide()
