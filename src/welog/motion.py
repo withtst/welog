@@ -101,7 +101,7 @@ class MotionTracker:
 
     def visual(self,old,current,old_masks,new_masks,old_regions,new_regions,direction,bounds,media_risk):
         """Shared live/replay decision. Media descriptors are never identities in risk mode."""
-        from .edge_layout import estimate_edge_layout,without_media
+        from .edge_layout import estimate_edge_layout,without_media,propose_bounded_static_layout,corroborate_bounded_surface
         aligner=OverlapAligner(replace(self.config,masks=self.config.masks+tuple(old_masks)+tuple(new_masks)))
         valid=aligner._valid_mask(current.shape)
         old_valid=OverlapAligner(replace(self.config,masks=self.config.masks+tuple(old_masks)))._valid_mask(current.shape)
@@ -110,6 +110,18 @@ class MotionTracker:
         if media_risk and bounds is not None:
             edge=estimate_edge_layout(old,current,static_old,static_new,aligner,direction,bounds)
             if edge.accepted:return edge,'bounded_layout'
+            proposal=propose_bounded_static_layout(old,current,static_old,static_new,aligner,direction,bounds)
+            if proposal.reason=='bounded_static_proposal':
+                # Media pixels may corroborate independently unique external
+                # evidence, but never choose between repeated-avatar aliases.
+                surface=corroborate_bounded_surface(old,current,old_valid,new_valid,aligner,direction,bounds)
+                if surface.accepted and surface.delta_px==proposal.delta_px:
+                    logger.info('bounded_media_corroborated delta=%s static_inliers=%s static_candidates=%s surface_inliers=%s surface_candidates=%s',
+                        surface.delta_px,proposal.inliers,proposal.candidates,surface.inliers,surface.candidates)
+                    surface.reason='bounded_media_corroborated'
+                    return surface,'bounded_layout'  # Constrained evidence cannot train calibration.
+                logger.info('media_corroboration_rejected proposed_delta=%s surface_delta=%s reason=%s',
+                    proposal.delta_px,surface.delta_px,surface.reason)
             failed=AlignmentResult(False,'static_media_layout_unconfirmed',edge_rejection_reason=edge.reason)
             return failed,'static_layout'
         if not media_risk:

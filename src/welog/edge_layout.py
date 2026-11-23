@@ -58,7 +58,23 @@ def estimate_edge_layout(old,current,old_valid,new_valid,aligner,direction,motio
     return large
 
 
-def _estimate_scale(old,current,old_valid,new_valid,aligner,direction,motion_bounds,patch_height):
+def propose_bounded_static_layout(old,current,old_valid,new_valid,aligner,direction,motion_bounds):
+    """A unique narrow static translation is a proposal, never an acceptance.
+
+    Keep the full-size patch, ratio, pixel and ambiguity checks. The caller
+    must independently corroborate the same delta with broad spatial support.
+    """
+    if motion_bounds is None:return AlignmentResult(False,'proposal_needs_motion_bounds')
+    return _estimate_scale(old,current,old_valid,new_valid,aligner,direction,motion_bounds,12,proposal_only=True)
+
+
+def corroborate_bounded_surface(old,current,old_valid,new_valid,aligner,direction,motion_bounds):
+    """Full-size pixel agreement with broad support on both axes, uniquely."""
+    if motion_bounds is None:return AlignmentResult(False,'surface_needs_motion_bounds')
+    return _estimate_scale(old,current,old_valid,new_valid,aligner,direction,motion_bounds,12,require_broad=True)
+
+
+def _estimate_scale(old,current,old_valid,new_valid,aligner,direction,motion_bounds,patch_height,*,proposal_only=False,require_broad=False):
     failed=AlignmentResult(False,'edge_layout_unconfirmed')
     h,w=old.shape;ph,pw=patch_height,16
     old_valid=old_valid.copy();new_valid=new_valid.copy()
@@ -138,13 +154,17 @@ def _estimate_scale(old,current,old_valid,new_valid,aligner,direction,motion_bou
         starts=[rows[0]]+[b for a,b in zip(rows,rows[1:]) if b-a>24]
         clusters=len(starts)
         broad=min(spread)>=48
+        if require_broad and not broad:
+            failed.reason='edge_layout_broad_support_required';continue
         # Narrow layouts need measured scroll bounds and several independent
         # avatar rows. Multiple translations inside those bounds still fail.
         tight_pair=motion_bounds is not None and clusters==2 and motion_bounds['maximum']-motion_bounds['minimum']<min(np.diff(starts))
         narrow=motion_bounds is not None and spread[0]>=16 and spread[1]>=48 and (clusters>=3 or tight_pair)
         if motion_bounds is None and spread[0]>=16 and spread[1]>=48 and clusters>=2:
             needs_bounds=True
-        if not broad and not narrow:
+        if proposal_only and min(spread)<16:
+            failed.reason='edge_layout_insufficient_proposal_span';continue
+        if not proposal_only and not broad and not narrow:
             failed.reason='edge_layout_narrow_support';continue
         reason='edge_layout_aligned' if ph==12 else f'edge_layout_aligned_{ph}px'
         accepted.append(AlignmentResult(True,reason,float(delta),length/h,len(points),candidates=len(centers),
@@ -154,4 +174,7 @@ def _estimate_scale(old,current,old_valid,new_valid,aligner,direction,motion_bou
         return failed
     if max(r.delta_px for r in accepted)-min(r.delta_px for r in accepted)>2:
         return AlignmentResult(False,'ambiguous_edge_layout',candidates=len(centers))
-    return max(accepted,key=lambda r:r.inliers)
+    result=max(accepted,key=lambda r:r.inliers)
+    if proposal_only:
+        result.accepted=False;result.reason='bounded_static_proposal'
+    return result
