@@ -406,10 +406,10 @@ def test_full_background_capture_while_target_keeps_moving_has_exact_roi_and_hei
     rows=read_jsonl(tmp_path/'capture/messages.jsonl')
     assert [r['global_top_px'] for r in rows]==sorted(r['global_top_px'] for r in rows)
 
-@pytest.mark.parametrize('case', ['read_minimized', 'scroll_hidden', 'closed', 'cancel', 'timeout', 'guard_changed'])
+@pytest.mark.parametrize('case', ['read_minimized', 'long_minimized', 'scroll_hidden', 'closed', 'cancel', 'timeout', 'guard_changed'])
 def test_background_capture_handles_target_loss_without_replaying_posted_wheels(tmp_path, monkeypatch, case):
     from dataclasses import replace
-    from welog import controller
+    from welog import background, controller
     from welog.archive import read_jsonl
     from welog.demo import make_scene
 
@@ -462,13 +462,23 @@ def test_background_capture_handles_target_loss_without_replaying_posted_wheels(
         assert len(messages) == (2 if case == 'scroll_hidden' else 1)
         if case == 'cancel':
             state['stop'] = True
-        elif case != 'timeout':
+        elif case not in {'timeout', 'long_minimized'}:
             state['availability'] = 'ready'
             if case == 'guard_changed':
                 state['guard'] = 220
 
     if case == 'timeout':
         monkeypatch.setattr(controller, 'BACKGROUND_RETURN_TIMEOUT_S', .01)
+    if case == 'long_minimized':
+        clock = [0]
+
+        def sleep(_):
+            assert len(messages) == 1
+            clock[0] += 15
+            if clock[0] == 45:
+                state['availability'] = 'ready'
+
+        monkeypatch.setattr(background, 'time', SimpleNamespace(monotonic=lambda: clock[0], sleep=sleep))
     output = tmp_path / 'capture'
     result = controller.run_capture(source, output, config=CaptureConfig(capture_backend='background',
         max_frames=3, stable_samples=2, sample_interval_s=.001, settle_delay_s=0, scroll_event_interval_s=0),
@@ -476,8 +486,8 @@ def test_background_capture_handles_target_loss_without_replaying_posted_wheels(
     assert result['rejected'] == 0 and result['image_memory_remaining_bytes'] == 0
     assert all(stream.closed for stream in streams)
     assert not list(output.rglob('*.png'))
-    if case in {'read_minimized', 'scroll_hidden'}:
-        assert waiting == ['window_minimized' if case == 'read_minimized' else 'window_hidden']
+    if case in {'read_minimized', 'long_minimized', 'scroll_hidden'}:
+        assert waiting == ['window_hidden' if case == 'scroll_hidden' else 'window_minimized']
         assert len(streams) == 2 and len(messages) == 3
         assert result['reason'] == 'max_frames' and result['accepted'] == 3
         assert result['final_scroll_offset_px'] == 150

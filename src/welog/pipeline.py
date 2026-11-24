@@ -61,9 +61,9 @@ class BoundaryBuffer:
 
 
 class FrameProcessor:
-    def __init__(self,output:Path,budget,backend,alignment,config):
+    def __init__(self,output:Path,budget,backend,alignment,config,*,append=False):
         self.output,self.budget,self.backend,self.config=output,budget,backend,config
-        self.store=MessageStore(output/'messages.sqlite3')
+        self.store=MessageStore(output/'messages.sqlite3', initialize=not append)
         self.assembler=FragmentAssembler(self.store)
         self.motion=MotionTracker(budget,alignment)
         self.boundary=BoundaryBuffer(budget)
@@ -80,7 +80,7 @@ class FrameProcessor:
             a,b=max(0,int(y1-offset)),min(image.shape[0],int(y2-offset))
             if b>a:image[a:b,max(0,int(x1)):min(image.shape[1],int(x2))]=background
 
-    def process(self,lease,frame_id,masks,direction,captured_at=None,motion_bounds=None):
+    def process(self,lease,frame_id,masks,direction,captured_at=None,motion_bounds=None,resume_join=None):
         try:
             image=lease.image
             # Credit for explicit temporary conversion/difference buffers. Model/native workspaces are separate.
@@ -106,8 +106,23 @@ class FrameProcessor:
                 media_risk=sum(b.kind in {'image','unknown'} for b in bubbles)>=2 and (bool(masks) or self.media_risk)
                 media_guard=media_risk and len(planning_anchors)<2
                 registration_risk=media_risk or (raw_media_count>0 and len(planning_anchors)<2)
-                result,reference,method=self.motion.accept(image,frame_id,anchors,direction,
-                    tuple(dict.fromkeys(tuple(masks)+overlay_masks)),motion_bounds,media_risk=registration_risk)
+                combined_masks = tuple(dict.fromkeys(tuple(masks)+overlay_masks))
+                if resume_join is None:
+                    result,reference,method=self.motion.accept(image,frame_id,anchors,direction,
+                        combined_masks,motion_bounds,media_risk=registration_risk)
+                else:
+                    point, result, previous = resume_join
+                    reference, method = point.frame['frame_id'], 'resume'
+                    previous_top = point.offset - self.config.origin_y_px
+                    previous_bubbles = detect_bubbles(previous)
+                    previous_media = [(x1, previous_top+y1, x2, previous_top+y2)
+                                      for bubble in previous_bubbles if bubble.kind != 'text'
+                                      for x1,y1,x2,y2 in [bubble.box]]
+                    self.previous_partial = any(b.kind == 'text' and
+                        (b.top_state != 'visible' or b.bottom_state != 'visible') for b in previous_bubbles)
+                    self.boundary.update(previous, previous_top, previous_media)
+                    self.motion.offset = point.offset + result.delta_px
+                    self.motion.accept(image, frame_id, anchors, direction, combined_masks)
                 repair_error=None
                 seam_calls=0
                 message_ids={}
@@ -158,16 +173,17 @@ class FrameProcessor:
 
 class OcrWorker:
     """One model owner, bounded pending tasks. Image ownership transfers on submit."""
-    def __init__(self,output,budget,backend,alignment,config,max_pending=2):
+    def __init__(self,output,budget,backend,alignment,config,max_pending=2,*,append=False):
         if max_pending<1:raise ValueError('Worker queue capacity must be positive')
         self.output,self.budget,self.backend,self.alignment,self.config=output,budget,backend,alignment,config
+        self.append=append
         self.executor=ThreadPoolExecutor(max_workers=1,thread_name_prefix='welog-ocr')
         self.credit=threading.BoundedSemaphore(max_pending)
         self.processor=None;self.closed=False
 
     def _process(self,lease,*args):
         if self.processor is None:
-            try:self.processor=FrameProcessor(self.output,self.budget,self.backend,self.alignment,self.config)
+            try:self.processor=FrameProcessor(self.output,self.budget,self.backend,self.alignment,self.config,append=self.append)
             except BaseException:lease.release();raise
         return self.processor.process(lease,*args)
 
@@ -182,7 +198,7 @@ class OcrWorker:
         def finish_owner():
             if self.processor is not None:return self.processor.finish(summary)
             summary.update(image_memory_peak_bytes=self.budget.peak_bytes,image_memory_remaining_bytes=self.budget.used_bytes)
-            store=MessageStore(self.output/'messages.sqlite3')
+            store=MessageStore(self.output/'messages.sqlite3',initialize=not self.append)
             try:return store.export(self.output,summary)
             finally:store.close()
         try:

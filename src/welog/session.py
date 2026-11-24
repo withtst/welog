@@ -8,8 +8,13 @@ from .archive import utc_now,write_json
 
 
 class MemorySession:
-    def __init__(self,path,metadata):
+    def __init__(self,path,metadata,*,resume=None):
         self.path=Path(path).resolve()
+        if resume is not None:
+            self.counter = resume.counter
+            self.last_height = resume.frame['height']
+            self.metadata = dict(resume.metadata)
+            return
         if self.path.exists() and any(self.path.iterdir()):raise ValueError('Output must be new or empty')
         self.path.mkdir(parents=True,exist_ok=True)
         self.counter=0
@@ -17,6 +22,13 @@ class MemorySession:
         self.metadata={'format_version':2,'kind':'live_memory','storage_mode':'memory_only',
                        'created_at':utc_now(),'status':'running',**metadata}
         write_json(self.path/'manifest.json',self.metadata)
+
+    def begin_resume(self):
+        self.metadata.pop('source_error', None)
+        self.metadata.pop('finished_at', None)
+        self.metadata['status'] = 'running'
+        self.metadata['resume_count'] = self.metadata.get('resume_count', 0) + 1
+        write_json(self.path/'manifest.json', self.metadata)
 
     def append(self,name,value):
         with (self.path/name).open('a',encoding='utf-8') as file:

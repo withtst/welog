@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from .archive import write_json
-from .controller import run_capture
+from .controller import resume_capture, run_capture
 from .models import AlignmentConfig, CaptureConfig, Rect
 from .picker import HoverLock, HoverState, RegionCalibration, WindowTarget, selection_to_pixels
 from .desktop_theme import GlassBackground, GlassCard, STYLESHEET, label, line_icon, primary
@@ -33,6 +33,7 @@ from .exports import discover_sessions
 from .records_ui import RecordsPanel
 from .record_actions import delete_record, plan_deletion
 from .record_state import record_name
+from .resume import ResumeError, load_resume_point
 from .exports import RecordSource
 
 logger = logging.getLogger("welog.gui")
@@ -260,12 +261,13 @@ class CaptureWorker(QThread):
 
     def __init__(
         self, target: WindowTarget, roi: Rect, guard: Rect | None, output: Path,
-        config: CaptureConfig, *, desktop_factory=None, source_factory=None,
+        config: CaptureConfig, *, desktop_factory=None, source_factory=None, resume=False,
     ):
         super().__init__()
         self.target, self.roi, self.guard, self.output, self.config = target, roi, guard, output, config
         self.desktop_factory, self.source_factory = desktop_factory, source_factory
         self.cancel_event = threading.Event()
+        self.resume = resume
 
     def stop(self) -> None:
         self.cancel_event.set()
@@ -282,13 +284,17 @@ class CaptureWorker(QThread):
             elif desktop.describe_window(self.target.hwnd)!=self.target:
                 raise RuntimeError("锁定的窗口已发生变化，请重新选择窗口。")
             source = (self.source_factory or source_factory(self.config.capture_backend))(desktop, self.target.hwnd, self.roi, self.guard)
-            result = run_capture(
-                source, str(self.output / "capture"), config=self.config,
-                metadata={"selection": "pointer_hover", "target": asdict(self.target),
-                          "roi": self.roi.to_dict(), "guard_roi": self.guard.to_dict() if self.guard else None},
-                progress=self.progress.emit, stop_requested=self.cancel_event.is_set,
-                availability_progress=lambda code: self.progress.emit({'waiting_for_target': code}),
-            )
+            callbacks = dict(progress=self.progress.emit, stop_requested=self.cancel_event.is_set,
+                             availability_progress=lambda code: self.progress.emit({'waiting_for_target': code}))
+            if self.resume:
+                result = resume_capture(source, self.output, **callbacks)
+            else:
+                result = run_capture(
+                    source, self.output / "capture", config=self.config,
+                    metadata={"selection": "pointer_hover", "target": asdict(self.target),
+                              "roi": self.roi.to_dict(), "guard_roi": self.guard.to_dict() if self.guard else None},
+                    **callbacks,
+                )
             self.result_ready.emit(result)
         except Exception as error:
             logger.exception("capture_worker_error")
@@ -303,6 +309,7 @@ class CaptureWindow(QMainWindow):
         self.target: WindowTarget | None = None
         self.roi: Rect | None = None
         self.guard: Rect | None = None
+        self.resume_selection = None
         self.report_path: str | None = None
         self.worker: CaptureWorker | None = None
         self.overlay: PickOverlay | None = None
@@ -352,6 +359,16 @@ class CaptureWindow(QMainWindow):
         self.sessions.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.sessions.itemClicked.connect(lambda item:self.show_records(item.data(Qt.ItemDataRole.UserRole)))
         rail.addWidget(self.sessions,1)
+        self.resume_button = QPushButton("继续采集所选记录")
+        self.resume_button.setToolTip("恢复原对话至最后确认画面，然后选择微信窗口。需要保留了续采点截图的记录。")
+        self.resume_button.setEnabled(False)
+        self.resume_button.clicked.connect(self.begin_resume)
+        self.sessions.itemSelectionChanged.connect(self.update_resume_button)
+        rail.addWidget(self.resume_button)
+        self.resume_image_button = QPushButton("查看续采参考图")
+        self.resume_image_button.setEnabled(False)
+        self.resume_image_button.clicked.connect(self.open_resume_image)
+        rail.addWidget(self.resume_image_button)
         self.refresh_button = QPushButton("刷新记录")
         self.refresh_button.clicked.connect(self.refresh_sessions)
         rail.addWidget(self.refresh_button)
@@ -533,13 +550,52 @@ class CaptureWindow(QMainWindow):
             self.refresh_sessions()
         except (OSError,ValueError) as error:self.records_panel.feedback.setText('删除失败：'+str(error))
 
+    def update_resume_button(self) -> None:
+        item = self.sessions.currentItem()
+        available = (self.stage == 'idle' and item is not None and bool(item.data(Qt.ItemDataRole.UserRole))
+                     and (self.worker is None or not self.worker.isRunning()))
+        self.resume_button.setEnabled(available)
+        self.resume_image_button.setEnabled(available)
+
+    def open_resume_image(self) -> None:
+        item = self.sessions.currentItem()
+        if item is None or not item.data(Qt.ItemDataRole.UserRole):
+            return
+        try:
+            point = load_resume_point(Path(item.data(Qt.ItemDataRole.UserRole)).parent)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(point.image_path)))
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            self.show_page(0)
+            self.status.setText(str(error))
+
+    def begin_resume(self) -> None:
+        item = self.sessions.currentItem()
+        if self.stage != 'idle' or item is None or not item.data(Qt.ItemDataRole.UserRole):
+            return
+        directory = Path(item.data(Qt.ItemDataRole.UserRole)).parent
+        try:
+            point = load_resume_point(directory)
+            if not point.metadata.get('target') or not point.metadata.get('roi'):
+                raise ResumeError('所选记录缺少微信窗口校准信息。')
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            self.show_page(0)
+            self.status.setText(str(error))
+            return
+        self.show_page(0)
+        self._pick_window((directory, point))
+
     def begin_pick(self) -> None:
+        self._pick_window()
+
+    def _pick_window(self, resume_selection=None) -> None:
         if self.records_panel.busy():
             self.status.setText('请等待记录操作完成。')
             return
         if self.stage != "idle" or (self.worker is not None and self.worker.isRunning()):
             return
         self.stage = "picking"
+        self.resume_selection = resume_selection
+        self.update_resume_button()
         self.target = self.roi = self.guard = None
         self.report_path = None
         self.report_button.setEnabled(False)
@@ -561,6 +617,22 @@ class CaptureWindow(QMainWindow):
     def window_locked(self, target: WindowTarget) -> None:
         logger.info("window_locked hwnd=%s pid=%s", target.hwnd, target.pid)
         self.target = target
+        if self.resume_selection:
+            from .windows import background_title_key
+            _, point = self.resume_selection
+            original = point.metadata['target']
+            expected = original['client']
+            if (target.executable != original['executable']
+                    or background_title_key(target.title) != background_title_key(original['title'])
+                    or (target.client.width, target.client.height) != (expected['width'], expected['height'])
+                    or (original.get('dpi') is not None and target.dpi != original['dpi'])):
+                self.fail('选择的窗口与原记录校准不匹配。')
+                return
+            self.roi = Rect(**point.metadata['roi'])
+            guard = point.metadata.get('guard_roi')
+            self.guard = Rect(**guard) if guard else None
+            self.begin_countdown()
+            return
         cached = self.cached_calibration
         if self.reuse_regions.isChecked() and cached is not None and cached.matches(target):
             self.roi, self.guard = cached.roi, cached.guard
@@ -617,14 +689,16 @@ class CaptureWindow(QMainWindow):
         self.remaining = self.countdown_seconds
         self.countdown_deadline = time.monotonic() + self.countdown_seconds
         stop_hint='点击停止按钮结束' if self.backend.currentData()=='background' else 'Esc 停止'
-        self.status.setText(f"已锁定：{self.target.title}\n{self.capture_storage_label()}\n{self.remaining} 秒后开始，{stop_hint}。")
+        detail = '将核对续采点后继续所选记录。' if self.resume_selection else self.capture_storage_label()
+        self.status.setText(f"已锁定：{self.target.title}\n{detail}\n{self.remaining} 秒后开始，{stop_hint}。")
         self.show()
         self.countdown_timer.start()
 
     def countdown_tick(self) -> None:
         if self.stage != "countdown":
             return
-        if self.backend.currentData()=='foreground' and self.desktop.escape_pressed():
+        backend = self.resume_selection[1].capture_config().capture_backend if self.resume_selection else self.backend.currentData()
+        if backend=='foreground' and self.desktop.escape_pressed():
             self.cancel()
             return
         self.remaining = max(0, math.ceil(self.countdown_deadline - time.monotonic()))
@@ -632,35 +706,41 @@ class CaptureWindow(QMainWindow):
             self.countdown_timer.stop()
             self.start_capture()
         else:
-            self.status.setText(f"已锁定：{self.target.title}\n{self.capture_storage_label()}\n{self.remaining} 秒后开始，可点击取消。")
+            detail = '将核对续采点后继续所选记录。' if self.resume_selection else self.capture_storage_label()
+            self.status.setText(f"已锁定：{self.target.title}\n{detail}\n{self.remaining} 秒后开始，可点击取消。")
 
     def start_capture(self) -> None:
         if self.target is None or self.roi is None or self.stage != "countdown":
             return
         try:
-            output = self.output_root / f"pointer-{datetime.now():%Y%m%d-%H%M%S}-{uuid4().hex[:6]}"
-            output.mkdir(parents=True)
-            write_json(output / "calibration.json", {
-                "selection": "pointer_hover", "target": asdict(self.target),
-                "title": self.target.title, "roi": self.roi.to_dict(),
-                "guard_roi": self.guard.to_dict() if self.guard else None,
-                "client_size": [self.target.client.width, self.target.client.height],
-                "alignment_config": AlignmentConfig().to_dict(),
-                "capture_direction": self.direction.currentData(),
-                "capture_mode":self.capture_mode.currentData(),
-                "debug_save_images":self.debug_images.isChecked(),
-                "capture_backend":self.backend.currentData(),
-            })
+            if self.resume_selection:
+                output, point = self.resume_selection
+                config = point.capture_config()
+            else:
+                output = self.output_root / f"pointer-{datetime.now():%Y%m%d-%H%M%S}-{uuid4().hex[:6]}"
+                output.mkdir(parents=True)
+                write_json(output / "calibration.json", {
+                    "selection": "pointer_hover", "target": asdict(self.target),
+                    "title": self.target.title, "roi": self.roi.to_dict(),
+                    "guard_roi": self.guard.to_dict() if self.guard else None,
+                    "client_size": [self.target.client.width, self.target.client.height],
+                    "alignment_config": AlignmentConfig().to_dict(),
+                    "capture_direction": self.direction.currentData(),
+                    "capture_mode":self.capture_mode.currentData(),
+                    "debug_save_images":self.debug_images.isChecked(),
+                    "capture_backend":self.backend.currentData(),
+                })
+                config = CaptureConfig(max_frames=0 if self.capture_mode.currentData()=='all' else self.frame_limit.value(),
+                                       direction=self.direction.currentData(), debug_save_images=self.debug_images.isChecked(),
+                                       capture_backend=self.backend.currentData())
             self.stage = "capturing"
-            if self.backend.currentData()=='foreground':
+            if config.capture_backend=='foreground':
                 self.hide()
                 self.desktop.activate(self.target.hwnd)
             self.backend.setEnabled(False)
             self.worker = CaptureWorker(self.target, self.roi, self.guard, output,
-                                        CaptureConfig(max_frames=0 if self.capture_mode.currentData()=='all' else self.frame_limit.value(),
-                                                      direction=self.direction.currentData(),debug_save_images=self.debug_images.isChecked(),
-                                                      capture_backend=self.backend.currentData()))
-            logger.info("gui_capture_start direction=%s backend=%s debug_save_images=%s output=%s", self.direction.currentData(), self.backend.currentData(), self.debug_images.isChecked(), output)
+                                        config, **({'resume': True} if self.resume_selection else {}))
+            logger.info("gui_capture_start direction=%s backend=%s debug_save_images=%s output=%s", config.direction, config.capture_backend, config.debug_save_images, output)
             self.worker.progress.connect(self.capture_progress, Qt.ConnectionType.QueuedConnection)
             self.worker.result_ready.connect(self.capture_finished, Qt.ConnectionType.QueuedConnection)
             self.worker.failed.connect(self.fail, Qt.ConnectionType.QueuedConnection)
@@ -673,7 +753,7 @@ class CaptureWindow(QMainWindow):
     def capture_progress(self, record: dict) -> None:
         if waiting := record.get('waiting_for_target'):
             state = '最小化' if waiting == 'window_minimized' else '隐藏'
-            self.status.setText(f'目标窗口已{state}。请在 30 秒内恢复窗口，采集会自动继续。\n也可点击停止。')
+            self.status.setText(f'目标窗口已{state}。恢复窗口后自动继续。\n也可点击停止。')
             return
         stop_hint='点击停止按钮结束' if self.backend.currentData()=='background' else 'Esc 停止'
         self.status.setText(f"已处理 {int(record['frame_id'])+1} 帧 · 累计位移 {record['scroll_offset_px']} px\n{stop_hint}")
@@ -734,8 +814,11 @@ class CaptureWindow(QMainWindow):
 
     def worker_finished(self) -> None:
         self.pick_button.setEnabled(self.stage == "idle")
+        self.update_resume_button()
 
     def restore_controls(self) -> None:
+        self.resume_selection = None
+        self.update_resume_button()
         self.backend.setEnabled(True)
         self.cancel_button.setEnabled(False)
         self.pick_button.setEnabled(self.worker is None or not self.worker.isRunning())

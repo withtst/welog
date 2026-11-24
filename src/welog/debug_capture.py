@@ -10,13 +10,13 @@ class DebugImageLimit(RuntimeError):
 
 
 class DebugSession(MemorySession):
-    def __init__(self,path,metadata,max_bytes):
+    def __init__(self,path,metadata,max_bytes,*,resume=None):
         super().__init__(path,{**metadata,'kind':'live_debug','storage_mode':'debug_images',
-            'debug_save_images':True,'debug_max_bytes':max_bytes})
+            'debug_save_images':True,'debug_max_bytes':max_bytes},resume=resume)
         self.max_bytes=max_bytes
-        self.image_bytes=0
-        self.image_count=0
-        (self.path/'frames').mkdir()
+        self.image_bytes=self.metadata.get('debug_image_bytes',0) if resume else 0
+        self.image_count=self.metadata.get('debug_image_count',0) if resume else 0
+        (self.path/'frames').mkdir(exist_ok=resume is not None)
 
     def save_image(self,relative,image):
         target=self.path/relative
@@ -44,11 +44,12 @@ class DebugSession(MemorySession):
 
 
 class EventDebugSession(DebugSession):
-    def __init__(self,path,metadata,max_bytes):
-        super().__init__(path,metadata,max_bytes)
-        self.metadata.update(kind='live_event_debug',storage_mode='event_images',debug_image_policy='events')
-        from .archive import write_json
-        write_json(self.path/'manifest.json',self.metadata)
+    def __init__(self,path,metadata,max_bytes,*,resume=None):
+        super().__init__(path,metadata,max_bytes,resume=resume)
+        if resume is None:
+            self.metadata.update(kind='live_event_debug',storage_mode='event_images',debug_image_policy='events')
+            from .archive import write_json
+            write_json(self.path/'manifest.json',self.metadata)
         self.unknown_seen=OrderedDict()
         self.ocr_seen=OrderedDict()
         self.retained=OrderedDict()

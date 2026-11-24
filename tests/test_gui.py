@@ -265,8 +265,55 @@ def test_background_worker_accepts_translation_since_lock_using_shared_validatio
 def test_background_wait_and_timeout_have_distinct_status_messages(app, tmp_path, code, label):
     window = CaptureWindow(SimpleNamespace(), tmp_path)
     window.capture_progress({'waiting_for_target': code})
-    assert label in window.status.text() and '30 秒内' in window.status.text()
+    assert label in window.status.text() and '自动继续' in window.status.text()
     window.capture_finished({'status': 'needs_attention', 'reason': 'BackgroundTargetUnavailable',
                              'source_error': {'code': code}, 'accepted': 1})
     assert label in window.status.text() and '采集结束' in window.status.text()
+    window.hide()
+
+
+def test_selected_record_resumes_in_place_with_original_direction_and_region(app, tmp_path, monkeypatch):
+    from dataclasses import asdict, replace
+    from welog import gui
+    from welog.controller import run_capture
+    from test_full_capture import Conversation, KnownText
+
+    selected = target()
+    region = Rect(21, 31, 400, 500)
+    path = tmp_path/'saved'/'capture'
+    source = Conversation('up', count=14)
+    progress = []
+    run_capture(source, path, config=CaptureConfig(direction='up', capture_backend='background',
+        max_frames=0, debug_save_images=True, sample_interval_s=.001, stable_samples=2, settle_delay_s=0),
+        metadata={'target': asdict(selected), 'roi': region.to_dict()}, ocr_backend=KnownText(source),
+        progress=progress.append, stop_requested=lambda: bool(progress))
+
+    calls = []
+    def forbidden(*args):
+        raise AssertionError('Background resume must not activate the fixture window')
+
+    class Worker:
+        def __init__(self, window, roi, guard, output, config, *, resume):
+            calls.append((window, roi, guard, output, config.direction, config.capture_backend, resume))
+            signal = SimpleNamespace(connect=lambda *args: None)
+            self.progress = self.result_ready = self.failed = self.finished = signal
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(gui, 'CaptureWorker', Worker)
+    window = CaptureWindow(SimpleNamespace(activate=forbidden, escape_pressed=lambda: False), tmp_path)
+    window.sessions.setCurrentRow(0)
+    assert window.resume_button.isEnabled()
+    window.direction.setCurrentIndex(window.direction.findData('down'))
+    window.backend.setCurrentIndex(window.backend.findData('foreground'))
+    window.begin_resume()
+    assert window.stage == 'picking'
+    window.overlay.finish()
+    moved = replace(selected, hwnd=789, client=Rect(-500, 90, 640, 720))
+    window.window_locked(moved)
+    window.countdown_timer.stop()
+    window.start_capture()
+    assert calls == [(moved, region, None, path, 'up', 'background', True)]
+    assert list(tmp_path.glob('pointer-*')) == []
     window.hide()

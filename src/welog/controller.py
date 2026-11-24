@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from concurrent.futures import TimeoutError as FutureTimeout
 from typing import Any,Callable,Protocol
 
@@ -12,13 +12,14 @@ from .frame_pool import ImageBudget
 from .models import AlignmentConfig,AlignmentResult,CaptureConfig,Rect
 from .pipeline import OcrWorker
 from .recognition import RapidOcrAdapter
+from .resume import ResumeError, load_resume_point, resume_lock
 from .scroll import ScrollPlanner,ScrollCalibration,retained_anchor_count
 from .session import MemorySession
 from .stability import LayoutStabilityDetector
 from .windows import BackgroundTargetError, BackgroundTargetUnavailable
 
 logger=logging.getLogger('welog.capture')
-BACKGROUND_RETURN_TIMEOUT_S = 30
+BACKGROUND_RETURN_TIMEOUT_S = float('inf')
 
 
 class Source(Protocol):
@@ -69,8 +70,24 @@ def wait_for_stable(source,config,alignment,stop_requested=None,diagnostics=None
         if workspace:workspace.release()
 
 
+def resume_capture(source, output, *, max_frames=0, **callbacks):
+    """Append a capture segment only after the current viewport joins its checkpoint."""
+    source_owned = False
+    try:
+        with resume_lock(output):
+            point = load_resume_point(output)
+            config = point.capture_config(max_frames)
+            alignment = AlignmentConfig.from_dict(point.metadata['alignment_config'])
+            source_owned = True
+            return run_capture(source, output, config=config, alignment=alignment, resume_point=point, **callbacks)
+    finally:
+        # A failed lock or checkpoint read happens before run_capture owns the source.
+        if not source_owned:
+            source.close()
+
+
 def run_capture(source,output,*,config=None,alignment=None,metadata=None,progress=None,stop_requested=None,ocr_backend=None,
-                availability_progress=None):
+                availability_progress=None,resume_point=None):
     """Memory-only by default; explicit debug mode retains ROI frames for offline analysis."""
     config,alignment=config or CaptureConfig(),alignment or AlignmentConfig()
     budget=ImageBudget(config.image_memory_limit_bytes)
@@ -88,6 +105,7 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
     source_error=None
     source_phase=None
     posted_events=0
+    first_counter = resume_point.counter if resume_point else 0
 
     def stopped():
         return bool((stop_requested and stop_requested()) or (getattr(source,'interrupted',lambda:False)()))
@@ -123,26 +141,35 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
             time.sleep(min(.05,max(0.,deadline-time.monotonic())))
 
     def has_capacity():
-        return config.max_frames==0 or session.counter<config.max_frames
+        return config.max_frames==0 or session.counter-first_counter<config.max_frames
 
     def capture_frame(image,action):
         if config.debug_save_images and not events_enabled:
             with budget.reserve(image.nbytes*2):return session.capture(image,action)
         return session.capture(image,action)
 
-    def attempt(action):
+    def stable_sample(stability, settings=config):
+        return with_target_available(
+            lambda: wait_for_stable(source,settings,alignment,stopped,stability,budget), 'read')
+
+    def attempt(action, sample=None, resume_join=None):
         nonlocal accepted,rejected,offset,reference,last_action
         nonlocal media_dominated,last_motion_method
         nonlocal planning_eligible,planning_boxes
         nonlocal debug_reference,debug_reference_frame,last_attempt_image,last_attempt_frame,last_attempt_accepted
-        last_action=action;stability={}
+        last_action=action
         last_attempt_image=None;last_attempt_frame=None;last_attempt_accepted=False
-        image=with_target_available(
-            lambda: wait_for_stable(source,config,alignment,stopped,stability,budget), 'read')
+        if sample is None:
+            stability = {}
+            image = stable_sample(stability)
+        else:
+            image, stability = sample
         frame=capture_frame(image,{**action,'stability':stability})
         if events_enabled:last_attempt_image=image;last_attempt_frame=frame
         lease=budget.copy(image)
-        future=worker.submit(lease,frame['frame_id'],tuple(Rect(**b) for b in stability.get('dynamic_masks',[])+stability.get('overlay_masks',[])),config.direction,frame['captured_at'],action.get('motion_bounds'))
+        parameters = (frame['frame_id'], tuple(Rect(**b) for b in stability.get('dynamic_masks',[])+stability.get('overlay_masks',[])),
+                      config.direction,frame['captured_at'],action.get('motion_bounds'))
+        future = worker.submit(lease, *parameters, resume_join) if resume_join else worker.submit(lease, *parameters)
         # Only one unverified transition is allowed: this wait supplies backpressure.
         # The model owns the lease until it finishes, even after a stop request.
         stop_latched=False
@@ -188,15 +215,36 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
         return result
 
     try:
+        if resume_point:
+            stability = {}
+            try:
+                current = stable_sample(stability, replace(config, debug_save_images=False))
+            except StableTimeout as error:
+                raise ResumeError('续采前未能取得稳定的聊天画面。请让窗口画面稳定后重试。') from error
+            masks = tuple(Rect(**box) for box in stability.get('dynamic_masks', [])+stability.get('overlay_masks', []))
+            with budget.reserve(current.nbytes*5):
+                match, previous = resume_point.verify(current, masks, config, alignment, budget)
+            if stopped():
+                raise KeyboardInterrupt
         session_metadata={'origin_y_px':config.origin_y_px,'capture_config':asdict(config),
                           'alignment_config':alignment.to_dict(),**(metadata or {})}
         if config.debug_save_images:
             from .debug_capture import DebugSession,EventDebugSession
-            session=(EventDebugSession if events_enabled else DebugSession)(output,session_metadata,config.debug_max_bytes)
+            session=(EventDebugSession if events_enabled else DebugSession)(output,session_metadata,config.debug_max_bytes,resume=resume_point)
         else:session=MemorySession(output,session_metadata)
-        worker=OcrWorker(session.path,budget,ocr_backend or RapidOcrAdapter(),alignment,config)
+        worker=OcrWorker(session.path,budget,ocr_backend or RapidOcrAdapter(),alignment,config,
+                         **({'append': True} if resume_point else {}))
         logger.info('memory_capture_start direction=%s backend=%s debug_save_images=%s debug_policy=%s output=%s',config.direction,config.capture_backend,config.debug_save_images,config.debug_image_policy,session.path)
-        attempt({'kind':'initial'})
+        if resume_point:
+            accepted, rejected = resume_point.metadata['accepted'], resume_point.metadata['rejected']
+            offset, reference = resume_point.offset, resume_point.frame['frame_id']
+            motion_observed = offset != 0
+            session.begin_resume()
+            with budget.reserve(current.nbytes+previous.nbytes):
+                attempt({'kind':'resume','checkpoint_frame_id':reference}, (current, stability), (resume_point, match, previous))
+            del current, previous
+        else:
+            attempt({'kind':'initial'})
         while has_capacity():
             if config.max_frames==0 and stationary:wait_at_boundary()
             forecast=calibration.planning_upper(planner.events)
@@ -248,7 +296,10 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
                 break
             if delta and not recovered:planner.observe(delta,events,session.last_height)
         else:status,reason='limit_reached','max_frames'
-    except KeyboardInterrupt:status,reason='stopped','user_interrupt'
+    except KeyboardInterrupt:
+        if session is None and resume_point:
+            raise ResumeError('已取消续采。') from None
+        status,reason='stopped','user_interrupt'
     except Exception as error:
         # Do not log vendor exception text that may include recognized chat content.
         status,reason='needs_attention',('ocr_backend_failed' if str(error).startswith('ocr_backend_failed:') else type(error).__name__)
@@ -309,6 +360,12 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
         try:source.close()
         finally:
             if session:
+                if events_enabled and status=='stopped' and debug_reference is not None:
+                    try:
+                        session.retain_frame(debug_reference_frame,debug_reference.image)
+                    except Exception as save_error:
+                        diagnostic_save_error=type(save_error).__name__
+                        logger.error('resume_checkpoint_retention_error type=%s',diagnostic_save_error)
                 if debug_reference:debug_reference.release();debug_reference=None
                 for lease in diagnostic_leases:lease.release()
                 last_attempt_image=None
