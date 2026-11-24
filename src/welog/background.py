@@ -8,8 +8,18 @@ from .models import Rect
 from .windows import DesktopError, BackgroundTargetChanged, BackgroundTargetUnavailable
 
 
-class BackgroundFrameStale(DesktopError):pass
+class BackgroundFrameStale(BackgroundTargetUnavailable):
+    default_code = 'background_frame_stale'
+
+    @property
+    def temporary(self):
+        return True
+
+
 class BackgroundCaptureUnavailable(DesktopError):pass
+
+
+MAX_STALE_RESTARTS = 3
 
 
 class WgcStream:
@@ -50,7 +60,9 @@ class WgcStream:
             if self.error:raise BackgroundCaptureUnavailable('WGC stream stopped: '+self.error)
             if self.closed:raise BackgroundCaptureUnavailable('WGC stream is closed')
             age=self.clock()-(self.arrived if self.latest is not None else self.created)
-            if age>2:raise BackgroundFrameStale('Window stopped producing fresh frames')
+            if age>2:
+                raise BackgroundFrameStale('Window stopped producing fresh frames',
+                    details={'age_ms': round(age * 1000), 'has_frame': self.latest is not None})
             if self.latest is None:return None,age
             return tuple(image.copy() if image is not None else None for image in self.latest),age
 
@@ -90,7 +102,8 @@ class BackgroundSource:
         raise BackgroundTargetChanged('Cannot establish a stable client mapping',code='window_mapping_unstable')
 
     def wait_for_target(self, error, deadline, stopped):
-        """Wait for the same target to return and obtain a fresh guarded frame."""
+        """Wait for the same target and restart stalled streams without input."""
+        stale_restarts = int(isinstance(error, BackgroundFrameStale))
         self._close_stream()
         while time.monotonic() < deadline:
             if stopped():
@@ -102,13 +115,20 @@ class BackgroundSource:
                     self.stream = self.stream_factory(self.target.hwnd, self._extract)
                 if self.read() is not None:
                     return
+            except BackgroundFrameStale as stale:
+                if stale_restarts >= MAX_STALE_RESTARTS:
+                    raise BackgroundFrameStale('Restarted WGC streams stopped producing frames',
+                        details={**stale.details, 'restart_attempts': stale_restarts}) from stale
+                stale_restarts += 1
+                error = stale
+                self._close_stream()
             except BackgroundTargetUnavailable as unavailable:
                 if not unavailable.temporary:
                     raise
                 error = unavailable
                 self._close_stream()
             time.sleep(min(.1, max(0., deadline - time.monotonic())))
-        raise BackgroundTargetUnavailable(
+        raise type(error)(
             'Timed out waiting for the background target',
             code=error.code, details={'wait_timed_out': True},
         ) from error

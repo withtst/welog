@@ -182,9 +182,29 @@ def _estimate_scale(old,current,old_valid,new_valid,aligner,direction,motion_bou
             points, tested = _static_support(current, old, new_valid, old_valid, reverse_delta, aligner, 12)
             if len(points) >= 6 and len(points) / max(1, tested) >= .85:
                 supported.append(result)
-        if not supported or max(r.delta_px for r in supported)-min(r.delta_px for r in supported)>2:
-            return AlignmentResult(False,'ambiguous_edge_layout',candidates=len(centers))
-        accepted = supported
+        if supported and max(r.delta_px for r in supported)-min(r.delta_px for r in supported)<=2:
+            accepted = supported
+        else:
+            # Repeated bubbles can pass the patch ratio in both directions
+            # while a single distinct bubble disproves the shifted copies.
+            # Allow faint noise on at most 0.1% of the static overlap.
+            # Every rival offset must have substantial contradictory pixels.
+            consistent = []
+            contradicted = 0
+            for candidate in accepted:
+                delta = int(candidate.delta_px)
+                pa, pb = max(0, delta), max(0, -delta)
+                length = h - abs(delta)
+                keep = old_valid[pa:pa+length] & new_valid[pb:pb+length]
+                difference = cv2.absdiff(old[pa:pa+length], current[pb:pb+length])[keep]
+                if difference.max() <= 8 and np.count_nonzero(difference) * 1000 <= difference.size:
+                    consistent.append(candidate)
+                elif np.count_nonzero(difference > 20) >= 12:
+                    contradicted += 1
+            if len(consistent) != 1 or contradicted != len(accepted) - 1:
+                return AlignmentResult(False,'ambiguous_edge_layout',candidates=len(centers))
+            consistent[0].reason = 'edge_layout_aligned_static_overlap'
+            accepted = consistent
     result=max(accepted,key=lambda r:r.inliers)
     if proposal_only:
         result.accepted=False;result.reason='bounded_static_proposal'

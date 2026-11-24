@@ -50,6 +50,30 @@ def test_verifying_more_proposals_does_not_choose_one_of_two_valid_translations(
     assert not result.accepted and result.reason=='ambiguous_edge_layout' and result.candidates>1
 
 
+@pytest.mark.parametrize('direction', ['up', 'down'])
+def test_distinct_bubble_excludes_repeated_bubble_aliases(direction):
+    world = np.full((900, 640), 247, np.uint8)
+    avatar = np.random.default_rng(17).integers(0, 256, (36, 36), dtype=np.uint8)
+    for y in range(22, 864, 56):
+        world[y:y+36, 20:56] = avatar
+        cv2.rectangle(world, (65, y), (149, y+35), 235, -1)
+        cv2.putText(world, 'one' if y == 302 else 'same', (76, y+25),
+                    cv2.FONT_HERSHEY_SIMPLEX, .55, 25, 1)
+    old, current = world[235:898], world[:663]
+    bounds = {'minimum': -350, 'maximum': 0}
+    delta = -235
+    if direction == 'down':
+        old, current = current, old
+        bounds = {'minimum': 0, 'maximum': 350}
+        delta = 235
+    current = current.copy()
+    current[420:424, 430:470] -= 8
+    valid = np.ones(old.shape, bool)
+    result = estimate_edge_layout(old, current, valid, valid, OverlapAligner(), direction, bounds)
+    assert result.accepted and result.delta_px == delta
+    assert result.reason == 'edge_layout_aligned_static_overlap'
+
+
 ROOT=Path('runs/pointer-20261121-001917-39602a/capture')
 @pytest.mark.skipif(not (ROOT/'frames/000649.png').exists(),reason='Private candidate-overflow pair unavailable')
 @pytest.mark.parametrize('replay',[False,True])

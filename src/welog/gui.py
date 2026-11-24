@@ -768,8 +768,12 @@ class CaptureWindow(QMainWindow):
 
     def capture_progress(self, record: dict) -> None:
         if waiting := record.get('waiting_for_target'):
-            state = '最小化' if waiting == 'window_minimized' else '隐藏'
-            self.status.setText(f'目标窗口已{state}。恢复窗口后自动继续。\n也可点击停止。')
+            label = {
+                'window_minimized': '目标窗口已最小化。恢复窗口后自动继续。',
+                'window_hidden': '目标窗口已隐藏。恢复窗口后自动继续。',
+                'background_frame_stale': '后台画面暂时停更，正在重新连接。恢复后自动继续。',
+            }.get(waiting, '正在等待后台画面恢复。')
+            self.status.setText(label + '\n也可点击停止。')
             return
         stop_hint='点击停止按钮结束' if self.backend.currentData()=='background' else 'Esc 停止'
         self.status.setText(f"已处理 {int(record['frame_id'])+1} 帧 · 累计位移 {record['scroll_offset_px']} px\n{stop_hint}")
@@ -793,7 +797,7 @@ class CaptureWindow(QMainWindow):
         elif detail=='continuity_unconfirmed':
             detail="无法确认跨页连续性，已原位停止。"
         elif detail=='DebugImageLimit':detail='调试截图达到存储上限，已停止。'
-        elif detail=='BackgroundFrameStale':detail='窗口停止提供新画面，已暂停；未抢夺焦点。'
+        elif detail=='BackgroundFrameStale':detail='重连后仍未收到后台画面，采集已停止。可在原记录上继续采集。'
         elif detail=='BackgroundCaptureUnavailable':detail='窗口采集不可用，已暂停；未切换到前台采集。'
         elif detail=='BackgroundTargetUnavailable':
             error = result.get('source_error', {})

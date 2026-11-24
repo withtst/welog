@@ -206,7 +206,10 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
         if result.get('candidates',0)>24:
             logger.info('registration_candidates_verified frame=%s candidates=%s accepted=%s inliers=%s reason=%s',
                 frame['frame_id'],result['candidates'],result['accepted'],result['inliers'],result['reason'])
-        if result['reason'].startswith('edge_layout_aligned_'):
+        if result['reason']=='edge_layout_aligned_static_overlap':
+            logger.info('edge_alias_resolved frame=%s delta=%s candidates=%s',
+                        frame['frame_id'],result['delta_px'],result['candidates'])
+        elif result['reason'].startswith('edge_layout_aligned_'):
             logger.info('edge_clipped_anchor_verified frame=%s reason=%s',frame['frame_id'],result['reason'])
         if progress:progress({'frame_id':frame['frame_id'],'accepted':result['accepted'],'reason':result['reason'],
                               'delta_px':result['delta_px'],'scroll_offset_px':outcome['scroll_offset_px']})

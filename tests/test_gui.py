@@ -272,6 +272,15 @@ def test_background_wait_and_timeout_have_distinct_status_messages(app, tmp_path
     window.hide()
 
 
+def test_stalled_stream_ui_reports_reconnection_and_same_record_resume(app, tmp_path):
+    window = CaptureWindow(SimpleNamespace(), tmp_path)
+    window.capture_progress({'waiting_for_target': 'background_frame_stale'})
+    assert '重新连接' in window.status.text() and '自动继续' in window.status.text()
+    window.capture_finished({'status': 'needs_attention', 'reason': 'BackgroundFrameStale', 'accepted': 1})
+    assert '原记录' in window.status.text()
+    window.hide()
+
+
 @pytest.mark.parametrize('from_record_page', [False, True])
 def test_selected_record_resumes_in_place_with_original_direction_and_region(app, tmp_path, monkeypatch, from_record_page):
     from dataclasses import asdict, replace

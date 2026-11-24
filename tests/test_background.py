@@ -509,3 +509,84 @@ def test_background_capture_handles_target_loss_without_replaying_posted_wheels(
                 assert result['source_error']['details']['wait_timed_out'] is True
             if case == 'closed':
                 assert not waiting and len(streams) == 1
+
+
+@pytest.mark.parametrize('case', ['recovers', 'exhausted', 'guard_changed', 'cancel'])
+def test_stalled_wgc_reconnects_after_wheel_without_using_cached_frames(tmp_path, monkeypatch, case):
+    from dataclasses import replace
+    from welog import background
+    from welog.archive import read_jsonl
+    from welog.controller import run_capture
+    from welog.demo import make_scene
+
+    d, target, messages = desktop()
+    target = replace(target, client=Rect(100, 120, 640, 744))
+    d.describe_window = lambda _: target
+    d.client_rect = d.capture_bounds = lambda _: target.client
+    d.background_scroll_target = lambda *args: 11
+    scene = make_scene(1300, 640, seed=89)
+    clock = [0.]
+    streams, captures, waiting = [], [], []
+
+    def factory(**kwargs):
+        assert kwargs['window_hwnd'] == target.hwnd
+        capture = Capture(**kwargs)
+        captures.append(capture)
+        return capture
+
+    def emit(capture, offset, guard):
+        frame = np.full((744, 640, 3), guard, np.uint8)
+        frame[24:] = scene[offset:offset+720]
+        capture.emit(frame)
+
+    def stream(hwnd, extract):
+        value = WgcStream(hwnd, extract, factory=factory, clock=lambda: clock[0])
+        streams.append(value)
+        if not messages or case in {'recovers', 'guard_changed'}:
+            guard = 220 if messages and case == 'guard_changed' else 100
+            emit(captures[-1], 50 * len(messages), guard)
+        return value
+
+    def post(*args):
+        messages.append(args)
+        if len(messages) == 1:
+            clock[0] += 3
+        else:
+            emit(captures[-1], 50 * len(messages), 100)
+        return True
+
+    def wait(_):
+        assert len(messages) == 1
+        clock[0] += .8
+
+    monkeypatch.setattr(background, 'time', SimpleNamespace(monotonic=lambda: clock[0], sleep=wait))
+    d.api.PostMessageW = Function(post)
+    source = BackgroundSource(d, target.hwnd, Rect(0, 24, 640, 720), Rect(0, 0, 80, 20),
+                              stream_factory=stream)
+    output = tmp_path / 'capture'
+    result = run_capture(source, output, config=CaptureConfig(capture_backend='background',
+        max_frames=3, max_scroll_events=1, stable_samples=2, sample_interval_s=.001,
+        settle_delay_s=0, scroll_event_interval_s=0),
+        availability_progress=waiting.append, stop_requested=lambda: case == 'cancel' and bool(waiting))
+    assert waiting == ['background_frame_stale']
+    assert all(capture.stops == 1 for capture in captures)
+    assert not list(output.rglob('*.png')) and result['image_memory_remaining_bytes'] == 0
+    assert result['rejected'] == 0
+    alignments = read_jsonl(output / 'alignments.jsonl')
+    if case == 'recovers':
+        assert len(streams) == 2 and len(messages) == 2
+        assert result['reason'] == 'max_frames' and result['accepted'] == 3
+        assert [row['scroll_offset_px'] for row in alignments] == [0, 50, 100]
+        positions = [row['global_top_px'] for row in read_jsonl(output / 'messages.jsonl')]
+        assert positions and positions == sorted(positions)
+    else:
+        assert len(messages) == 1 and result['accepted'] == 1
+        assert [row['scroll_offset_px'] for row in alignments] == [0]
+        if case == 'exhausted':
+            assert result['reason'] == 'BackgroundFrameStale'
+            assert result['source_error']['code'] == 'background_frame_stale'
+            assert result['source_error']['details']['restart_attempts'] == len(streams) - 1 == 3
+        elif case == 'guard_changed':
+            assert result['source_error']['code'] == 'conversation_guard_changed'
+        else:
+            assert len(streams) == 1 and result['reason'] == 'user_interrupt'
