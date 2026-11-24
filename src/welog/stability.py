@@ -74,11 +74,19 @@ class LayoutStabilityDetector:
         if not valid.any():
             return StabilityResult(False, "no_visible_area", len(self.history))
         # Compare the whole window to its oldest sample to catch gradual scrolling.
-        differences = [np.abs(item.astype(np.int16) - reference.astype(np.int16))
-                       for item in list(self.history)[1:]]
-        if all(np.array_equal(reference[valid], item[valid]) for item in list(self.history)[1:]):
+        largest_difference = np.zeros_like(reference)
+        for item in list(self.history)[1:]:
+            np.maximum(largest_difference, cv2.absdiff(reference, item), out=largest_difference)
+        largest_difference[~valid] = 0
+        if not largest_difference.any():
             return StabilityResult(True, "static", len(self.history),overlay_masks=overlays)
-        changed = np.logical_or.reduce([difference > 10 for difference in differences]) & valid
+        # Window capture can vary by a few gray levels at a clipped border.
+        # Require exact agreement across the interior and tightly bound both
+        # the number and amplitude of the changed perimeter pixels.
+        if (not largest_difference[1:-1, 1:-1].any()
+                and np.count_nonzero(largest_difference) <= 64 and largest_difference.max() <= 4):
+            return StabilityResult(True, "minor_border_noise", len(self.history),overlay_masks=overlays)
+        changed = largest_difference > 10
         height, width = reference.shape
         tile = 32
         masks: list[Rect] = []

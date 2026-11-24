@@ -27,6 +27,7 @@ class ResumePoint:
     masks: tuple[Rect, ...]
     offset: float
     counter: int
+    scroll_samples: tuple[tuple[float, int, str], ...]
 
     def capture_config(self, max_frames=0):
         return replace(CaptureConfig(**self.metadata['capture_config']), max_frames=max_frames)
@@ -82,7 +83,25 @@ def load_resume_point(directory):
     stability = frame['action'].get('stability', {})
     masks = tuple(Rect(**box) for box in stability.get('dynamic_masks', []) + stability.get('overlay_masks', [])
                   + accepted[-1].get('motion_overlay_masks', []))
-    return ResumePoint(metadata, frame, image_path, masks, checkpoint['scroll_offset_px'], len(frames))
+    config = CaptureConfig(**metadata['capture_config'])
+    sign = -1 if config.direction == 'up' else 1
+    scroll_samples = []
+    # Only use direct observations under the record's calibrated wheel command.
+    # A constraint-confirmed move or a retry must not reinforce these bounds.
+    for previous, decision in zip(reversed(frames), reversed(alignments)):
+        action = previous['action']
+        method = decision.get('motion_method')
+        result = decision['alignment']
+        delta = result.get('delta_px')
+        events = action.get('events', 0)
+        if (action.get('kind') == 'scroll' and action.get('event_units') == sign * config.initial_wheel_units
+                and 0 < events <= config.max_scroll_events and method in {'text', 'template', 'static_features', 'edge_layout'}
+                and result['accepted'] and delta is not None and 0 < sign * delta < frame['height']):
+            scroll_samples.append((delta, events, method))
+            if len(scroll_samples) == 8:
+                break
+    return ResumePoint(metadata, frame, image_path, masks, checkpoint['scroll_offset_px'], len(frames),
+                       tuple(reversed(scroll_samples)))
 
 
 @contextmanager

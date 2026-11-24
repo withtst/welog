@@ -71,3 +71,31 @@ def test_wait_returns_animation_masks_without_waiting_for_every_pixel_to_stop():
     assert result.shape == base.shape
     assert diagnostics["stable"]
     assert diagnostics["dynamic_masks"]
+
+
+def test_repeated_media_with_tiny_clipped_border_noise_is_stationary():
+    rng = np.random.default_rng(18653)
+    scene = np.full((663, 880, 3), 247, np.uint8)
+    picture = rng.integers(10, 230, (132, 132, 3), dtype=np.uint8)
+    avatar = rng.integers(10, 230, (36, 36, 3), dtype=np.uint8)
+    for y in (77, 229, 381):
+        scene[y:y+132, 687:819] = picture
+        scene[y:y+36, 833:869] = avatar
+    detector = LayoutStabilityDetector(AlignmentConfig())
+    for i in range(3):
+        sample = scene.copy()
+        sample[0, 707+i:720+i] -= i*2
+        result = detector.observe(sample)
+    assert result.stable and result.reason == 'minor_border_noise'
+    assert not result.dynamic_masks
+
+
+def test_border_rule_does_not_swallow_low_contrast_messages_moving_interior():
+    scene = np.full((750, 640, 3), 247, np.uint8)
+    cv2.putText(scene, 'moving low contrast text', (70, 300), cv2.FONT_HERSHEY_SIMPLEX, .5, (243,)*3, 1)
+    detector = LayoutStabilityDetector(AlignmentConfig())
+    for i in range(4):
+        sample = scene[i:i+663].copy()
+        sample[0, 67:80] -= i
+        result = detector.observe(sample)
+    assert not result.stable

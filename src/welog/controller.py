@@ -239,6 +239,8 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
             accepted, rejected = resume_point.metadata['accepted'], resume_point.metadata['rejected']
             offset, reference = resume_point.offset, resume_point.frame['frame_id']
             motion_observed = offset != 0
+            for delta, events, method in resume_point.scroll_samples:
+                calibration.observe(delta, events, method)
             session.begin_resume()
             with budget.reserve(current.nbytes+previous.nbytes):
                 attempt({'kind':'resume','checkpoint_frame_id':reference}, (current, stability), (resume_point, match, previous))

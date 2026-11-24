@@ -117,3 +117,28 @@ def test_unstable_resume_does_not_record_diagnostic_frames(tmp_path, monkeypatch
     with pytest.raises(ResumeError, match='稳定的聊天画面'):
         resume_capture(source, path, ocr_backend=KnownText(source))
     assert snapshot(path) == before and source.closed and not source.inputs
+
+
+def test_resume_restores_independent_wheel_bounds_before_first_scroll(tmp_path):
+    class SmallSteps(Conversation):
+        def scroll(self, units):
+            self.inputs.append(units)
+            self.position = max(0, self.position-37)
+
+    path = tmp_path/'capture'
+    source = SmallSteps('up', count=14)
+    progress = []
+    first = run_capture(source, path, config=CaptureConfig(direction='up', max_frames=0, max_scroll_events=1,
+        debug_save_images=True, stable_samples=2, sample_interval_s=.001,
+        settle_delay_s=0, scroll_event_interval_s=0), ocr_backend=KnownText(source),
+        progress=progress.append, stop_requested=lambda: len(progress) == 4)
+    assert first['status'] == 'stopped' and first['final_scroll_offset_px'] == -111
+    resumed = SmallSteps('up', count=14)
+    resumed.position = source.position
+    result = resume_capture(resumed, path, max_frames=2, ocr_backend=KnownText(resumed))
+    scroll = read_jsonl(path/'frames.jsonl')[-1]['action']
+    assert scroll['kind'] == 'scroll' and scroll['events'] == 1
+    assert scroll['motion_bounds']['minimum'] == -64 and scroll['motion_bounds']['maximum'] == 0
+    assert result['final_scroll_offset_px'] == -148 and len(resumed.inputs) == 1
+    positions = [row['global_top_px'] for row in RecordSource(path).records()]
+    assert positions == sorted(positions)
