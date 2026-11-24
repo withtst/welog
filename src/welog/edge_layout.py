@@ -173,7 +173,18 @@ def _estimate_scale(old,current,old_valid,new_valid,aligner,direction,motion_bou
         if needs_bounds:failed.reason='edge_layout_needs_motion_bounds'
         return failed
     if max(r.delta_px for r in accepted)-min(r.delta_px for r in accepted)>2:
-        return AlignmentResult(False,'ambiguous_edge_layout',candidates=len(centers))
+        # A repeated timestamp can align old texture against a mostly empty
+        # overlap. Test texture in the current frame as well before calling
+        # two candidate offsets equivalent.
+        supported = []
+        for result in accepted:
+            reverse_delta = -int(result.delta_px)
+            points, tested = _static_support(current, old, new_valid, old_valid, reverse_delta, aligner, 12)
+            if len(points) >= 6 and len(points) / max(1, tested) >= .85:
+                supported.append(result)
+        if not supported or max(r.delta_px for r in supported)-min(r.delta_px for r in supported)>2:
+            return AlignmentResult(False,'ambiguous_edge_layout',candidates=len(centers))
+        accepted = supported
     result=max(accepted,key=lambda r:r.inliers)
     if proposal_only:
         result.accepted=False;result.reason='bounded_static_proposal'

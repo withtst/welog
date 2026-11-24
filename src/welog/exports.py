@@ -34,16 +34,20 @@ class RecordSource:
             raise ValueError('请选择 WeLog SQLite、JSONL 或 JSON 记录')
         self.path=path
 
-    def records(self):
+    def records(self, *, include_evidence=True):
         from .record_state import project_records
-        yield from project_records(self)
+        yield from project_records(self, include_evidence=include_evidence)
 
-    def raw_records(self):
+    @property
+    def is_database(self):
+        return self.path.suffix.lower() in {'.sqlite3', '.db'}
+
+    def raw_records(self, *, include_evidence=True):
         suffix=self.path.suffix.lower()
         if suffix in {'.sqlite3','.db'}:
             store=MessageStore(self.path,initialize=False,readonly=True)
             try:
-                for row in store.iter_messages():yield self.normalize(row)
+                for row in store.iter_messages(include_evidence=include_evidence):yield self.normalize(row)
             finally:store.close()
         elif suffix=='.jsonl':
             with self.path.open(encoding='utf-8-sig') as file:
@@ -95,7 +99,7 @@ def preview_records(source:RecordSource,*,offset=0,limit=200,search='',time_filt
     rows=[];count=0;total=0;incomplete=0
     type_counts={};direction_counts={};groups={};edited=0
     query=search.casefold().strip()
-    for row in source.records():
+    for row in source.records(include_evidence=False):
         total+=1;incomplete+=row['status']!='complete'
         type_counts[row['type']]=type_counts.get(row['type'],0)+1
         direction_counts[row['direction']]=direction_counts.get(row['direction'],0)+1
@@ -106,6 +110,14 @@ def preview_records(source:RecordSource,*,offset=0,limit=200,search='',time_filt
         if query and query not in row['text'].casefold():continue
         if offset<=count<offset+limit:rows.append(row)
         count+=1
+    if rows and source.is_database:
+        store = MessageStore(source.path, initialize=False, readonly=True)
+        try:
+            evidence = store.evidence_for([row['message_id'] for row in rows])
+        finally:
+            store.close()
+        for row in rows:
+            row['evidence'] = evidence[row['message_id']]
     statistics={'total':total,'incomplete':incomplete,'type_counts':type_counts,'direction_counts':direction_counts,'edited':edited,'time_groups':groups}
     from .record_state import describe
     return {'rows':rows,'matched':count,'total':total,'incomplete':incomplete,'offset':offset,'statistics':statistics,'metadata':describe(source,statistics)}

@@ -362,7 +362,7 @@ class CaptureWindow(QMainWindow):
         self.resume_button = QPushButton("继续采集所选记录")
         self.resume_button.setToolTip("恢复原对话至最后确认画面，然后选择微信窗口。需要保留了续采点截图的记录。")
         self.resume_button.setEnabled(False)
-        self.resume_button.clicked.connect(self.begin_resume)
+        self.resume_button.clicked.connect(lambda: self.begin_resume())
         self.sessions.itemSelectionChanged.connect(self.update_resume_button)
         rail.addWidget(self.resume_button)
         self.resume_image_button = QPushButton("查看续采参考图")
@@ -386,6 +386,7 @@ class CaptureWindow(QMainWindow):
         self.pages.addWidget(self.build_capture_page(max_frames))
         self.records_panel = RecordsPanel(self.output_root)
         self.records_panel.delete_requested.connect(self.delete_saved_record)
+        self.records_panel.resume_requested.connect(self.begin_resume)
         self.records_panel.record_changed.connect(self.refresh_sessions)
         self.pages.addWidget(self.records_panel)
         workspace.addWidget(self.pages,1)
@@ -456,8 +457,8 @@ class CaptureWindow(QMainWindow):
         content.addWidget(self.storage_hint)
         content.addSpacing(4)
         buttons=QHBoxLayout()
-        self.pick_button=primary(QPushButton("选择窗口并开始"))
-        self.pick_button.setToolTip("点击后，将光标移到微信聊天窗口，停留片刻锁定并校准。")
+        self.pick_button=primary(QPushButton("新建采集记录"))
+        self.pick_button.setToolTip("建立新记录。接续已有进度时，请在记录页面点击「在此记录上继续采集」。")
         self.cancel_button=QPushButton("取消 / 停止")
         self.report_button=QPushButton("查看本次记录")
         self.debug_images.toggled.connect(self.update_debug_ui)
@@ -490,7 +491,7 @@ class CaptureWindow(QMainWindow):
 
     def update_debug_ui(self):
         self.storage_hint.setText(self.capture_storage_label())
-        self.pick_button.setText('选择窗口并开始调试' if self.debug_images.isChecked() else '选择窗口并开始')
+        self.pick_button.setText('新建记录并开始调试' if self.debug_images.isChecked() else '新建采集记录')
 
     def update_capture_mode(self):
         limited=self.capture_mode.currentData()=='limited'
@@ -505,7 +506,11 @@ class CaptureWindow(QMainWindow):
         self.records_nav.setChecked(index==1)
         self.page_heading.setText("采集工作台" if index==0 else "记录与导出")
 
-    def refresh_sessions(self):
+    def refresh_sessions(self, *, selected_path=None):
+        current = self.sessions.currentItem()
+        if selected_path is None and current is not None:
+            selected_path = current.data(Qt.ItemDataRole.UserRole)
+        selected_path = Path(selected_path).resolve() if selected_path else None
         self.sessions.clear()
         try:
             for path in discover_sessions(self.output_root):
@@ -514,6 +519,8 @@ class CaptureWindow(QMainWindow):
                 item.setToolTip(str(path))
                 item.setData(Qt.ItemDataRole.UserRole,str(path))
                 self.sessions.addItem(item)
+                if path.resolve() == selected_path:
+                    self.sessions.setCurrentItem(item)
         except OSError:
             logger.warning('Unable to enumerate saved records',exc_info=True)
         if not self.sessions.count():
@@ -568,12 +575,19 @@ class CaptureWindow(QMainWindow):
             self.show_page(0)
             self.status.setText(str(error))
 
-    def begin_resume(self) -> None:
-        item = self.sessions.currentItem()
-        if self.stage != 'idle' or item is None or not item.data(Qt.ItemDataRole.UserRole):
+    def begin_resume(self, path=None) -> None:
+        if self.stage != 'idle' or (self.worker is not None and self.worker.isRunning()):
             return
-        directory = Path(item.data(Qt.ItemDataRole.UserRole)).parent
+        if path is None:
+            item = self.sessions.currentItem()
+            path = item.data(Qt.ItemDataRole.UserRole) if item else None
+            if not path:
+                return
         try:
+            source = RecordSource(path)
+            directory = source.path.parent
+            if source.path.name != 'messages.sqlite3':
+                raise ResumeError('请打开原始采集记录的消息库。')
             point = load_resume_point(directory)
             if not point.metadata.get('target') or not point.metadata.get('roi'):
                 raise ResumeError('所选记录缺少微信窗口校准信息。')
@@ -740,7 +754,9 @@ class CaptureWindow(QMainWindow):
             self.backend.setEnabled(False)
             self.worker = CaptureWorker(self.target, self.roi, self.guard, output,
                                         config, **({'resume': True} if self.resume_selection else {}))
-            logger.info("gui_capture_start direction=%s backend=%s debug_save_images=%s output=%s", config.direction, config.capture_backend, config.debug_save_images, output)
+            logger.info("gui_capture_start mode=%s direction=%s backend=%s debug_save_images=%s output=%s",
+                        'resume' if self.resume_selection else 'new',
+                        config.direction, config.capture_backend, config.debug_save_images, output)
             self.worker.progress.connect(self.capture_progress, Qt.ConnectionType.QueuedConnection)
             self.worker.result_ready.connect(self.capture_finished, Qt.ConnectionType.QueuedConnection)
             self.worker.failed.connect(self.fail, Qt.ConnectionType.QueuedConnection)
@@ -809,8 +825,9 @@ class CaptureWindow(QMainWindow):
         logger.info("gui_capture_result status=%s reason=%s report=%s", result['status'], result.get('reason'), self.report_path)
         self.restore_controls()
         if self.report_path and (Path(self.report_path).parent/'messages.sqlite3').is_file():
-            self.refresh_sessions()
-            self.show_records(Path(self.report_path).parent)
+            messages = Path(self.report_path).parent/'messages.sqlite3'
+            self.refresh_sessions(selected_path=messages)
+            self.show_records(messages)
 
     def worker_finished(self) -> None:
         self.pick_button.setEnabled(self.stage == "idle")

@@ -121,3 +121,30 @@ def test_empty_source_and_wrong_directory(source,tmp_path):
     assert result['count']==0
     assert json.loads(Path(result['files'][0]).read_text(encoding='utf-8'))['messages']==[]
     with pytest.raises(ValueError,match='不是目录'):export_records(source,source.path,['txt'])
+
+
+def test_sqlite_preview_hydrates_only_visible_evidence_in_legacy_store(tmp_path, monkeypatch):
+    path = tmp_path/'messages.sqlite3'
+    store = MessageStore(path)
+    store.connection.execute('DROP INDEX observation_message')
+    for i in range(25):
+        message_id = str(i)
+        store.connection.execute('INSERT INTO messages VALUES (?,?,?,?,?,?,?,?,?,?)',
+                                 (message_id, 'incoming', 'image', 1, 90, i*100, i*100+80, 1, 1, 0))
+        store.connection.execute('INSERT INTO observations VALUES (?,?,?,?,?,?)',
+                                 (message_id, '000001', '[1,2,3,4]', 'visible', 'visible', 'ok'))
+    store.close()
+    before = path.read_bytes()
+    calls = []
+    original = MessageStore.evidence_for
+
+    def evidence(self, ids):
+        calls.append(ids)
+        return original(self, ids)
+
+    monkeypatch.setattr(MessageStore, 'evidence_for', evidence)
+    page = preview_records(RecordSource(path), offset=10, limit=3)
+    assert calls == [['10', '11', '12']] and page['total'] == page['matched'] == 25
+    assert page['rows'][0]['evidence'][0]['box'] == [1, 2, 3, 4]
+    assert preview_records(RecordSource(path), limit=0)['total'] == 25
+    assert len(calls) == 1 and path.read_bytes() == before

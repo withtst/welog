@@ -75,11 +75,11 @@ def rename_record(source,name):
     with connect(source,True) as db:set_meta(db,'name',name)
 
 
-def project_records(source):
+def project_records(source, *, include_evidence=True):
     from .file_cards import reclassify_stored_record
     with connect(source) as db:
         markers=bool(db and db.execute('SELECT 1 FROM time_markers LIMIT 1').fetchone())
-        for row in source.raw_records():
+        for row in source.raw_records(include_evidence=include_evidence):
             original=row
             row=reclassify_stored_record(row)
             edit=db.execute('SELECT patch,updated_at FROM edits WHERE message_id=?',(row['message_id'],)).fetchone() if db else None

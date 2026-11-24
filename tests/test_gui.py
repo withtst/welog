@@ -272,7 +272,8 @@ def test_background_wait_and_timeout_have_distinct_status_messages(app, tmp_path
     window.hide()
 
 
-def test_selected_record_resumes_in_place_with_original_direction_and_region(app, tmp_path, monkeypatch):
+@pytest.mark.parametrize('from_record_page', [False, True])
+def test_selected_record_resumes_in_place_with_original_direction_and_region(app, tmp_path, monkeypatch, from_record_page):
     from dataclasses import asdict, replace
     from welog import gui
     from welog.controller import run_capture
@@ -307,7 +308,15 @@ def test_selected_record_resumes_in_place_with_original_direction_and_region(app
     assert window.resume_button.isEnabled()
     window.direction.setCurrentIndex(window.direction.findData('down'))
     window.backend.setCurrentIndex(window.backend.findData('foreground'))
-    window.begin_resume()
+    if from_record_page:
+        from welog.exports import RecordSource
+        window.sessions.clearSelection()
+        window.sessions.setCurrentItem(None)
+        window.records_panel.source = RecordSource(path)
+        window.records_panel.update_actions()
+        window.records_panel.resume_button.click()
+    else:
+        window.begin_resume()
     assert window.stage == 'picking'
     window.overlay.finish()
     moved = replace(selected, hwnd=789, client=Rect(-500, 90, 640, 720))

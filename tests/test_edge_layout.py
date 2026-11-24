@@ -114,3 +114,17 @@ def test_controlled_animation_pair_passes_stability_and_capture_pipeline(tmp_pat
     result=run_capture(Source(),tmp_path/'capture',config=CaptureConfig(max_frames=2,direction='up',
         sample_interval_s=.001,stable_samples=3,stable_timeout_s=3,settle_delay_s=0),ocr_backend=EmptyOcr())
     assert result['accepted']==2 and result['rejected']==0 and result['final_scroll_offset_px']==-201
+
+
+def test_candidate_that_ignores_new_texture_does_not_block_verified_translation():
+    rng = np.random.default_rng(22)
+    world = np.full((900, 640), 250, np.uint8)
+    tile = rng.integers(15, 225, (36, 72), dtype=np.uint8)
+    for y in (340, 436, 532):
+        world[y:y+36, 48:120] = tile
+    world[510:577, 220:440] = rng.integers(0, 240, (67, 220), dtype=np.uint8)
+    old, current = world[300:], world[:600]
+    valid = np.ones(old.shape, bool)
+    result = estimate_edge_layout(old, current, valid, valid, OverlapAligner(), 'up',
+                                  {'minimum': -402, 'maximum': 0})
+    assert result.accepted and result.delta_px == -300 and result.validation_coverage == 1

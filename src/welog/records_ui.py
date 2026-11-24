@@ -67,6 +67,7 @@ class MutationWorker(QThread):
 
 class RecordsPanel(QWidget):
     source_loaded=Signal(str)
+    resume_requested=Signal(str)
     delete_requested=Signal(str)
     record_changed=Signal()
 
@@ -112,6 +113,9 @@ class RecordsPanel(QWidget):
         self.import_button.clicked.connect(self.import_records)
         top.addWidget(self.import_button)
         content.addLayout(top)
+        self.resume_button = primary(QPushButton('在此记录上继续采集'))
+        self.resume_button.clicked.connect(lambda: self.resume_requested.emit(str(self.source.path)) if self.source else None)
+        content.addWidget(self.resume_button)
         self.source_label=label('选择或打开记录','muted')
         self.source_label.setWordWrap(True)
         content.addWidget(self.source_label)
@@ -293,6 +297,7 @@ class RecordsPanel(QWidget):
         loading=self.load_worker is not None
         exporting=self.export_worker is not None
         available=self.source is not None and not self.busy()
+        self.resume_button.setEnabled(available)
         self.export_button.setEnabled(available and any(box.isChecked() for box in self.formats.values()))
         for button in [self.delete_button,self.rename_button,self.info_button]:button.setEnabled(available)
         row=self.selected_record()

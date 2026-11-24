@@ -23,16 +23,43 @@ class MessageStore:
             CREATE TABLE observations(message_id TEXT,frame_id TEXT,box TEXT,top_state TEXT,bottom_state TEXT,ocr_status TEXT);
             CREATE INDEX message_location ON messages(direction,top,bottom);
             CREATE INDEX line_location ON lines(message_id,top,bottom);
+            CREATE INDEX observation_message ON observations(message_id);
         ''')
         if initialize:
             from .timeline import SCHEMA
             self.connection.executescript(SCHEMA+'''CREATE TABLE IF NOT EXISTS message_details(message_id TEXT PRIMARY KEY,data TEXT);''')
         self.tables={row[0] for row in self.connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
-    def iter_messages(self):
+    def evidence_for(self, message_ids):
+        result = {message_id: [] for message_id in message_ids}
+        for start in range(0, len(message_ids), 500):
+            batch = message_ids[start:start+500]
+            placeholders = ','.join('?' for _ in batch)
+            rows = self.connection.execute(
+                f"SELECT message_id,frame_id,box,top_state,bottom_state,ocr_status FROM observations "
+                f"WHERE message_id IN ({placeholders}) ORDER BY rowid", batch)
+            for row in rows:
+                item = dict(row)
+                message_id = item.pop('message_id')
+                item['box'] = json.loads(item['box'])
+                result[message_id].append(item)
+        return result
+
+    def _message_rows(self, include_evidence):
         # Upward capture discovers older messages later at negative coordinates.
         # Ascending global top is chronological in either direction; never reverse by frame order.
-        for message in self.connection.execute("SELECT * FROM messages ORDER BY top,x1,id"):
+        cursor = self.connection.execute("SELECT * FROM messages ORDER BY top,x1,id")
+        if not include_evidence:
+            for message in cursor:
+                yield message, None
+            return
+        while batch := cursor.fetchmany(500):
+            evidence = self.evidence_for([message['id'] for message in batch])
+            for message in batch:
+                yield message, evidence[message['id']]
+
+    def iter_messages(self, *, include_evidence=True):
+        for message, evidence in self._message_rows(include_evidence):
             lines = self.connection.execute("SELECT * FROM lines WHERE message_id=? ORDER BY top,x1", (message['id'],)).fetchall()
             readable = any(line['text'] for line in lines)
             text = '\n'.join(line['text'] for line in lines)
@@ -56,8 +83,7 @@ class MessageStore:
                    'bottom_state':'visible' if message['tail'] else 'clipped',
                    'status':status,'complete':complete,'coordinate_status':'confirmed',
                    'coverage_status':'unknown' if message['needs_review'] else 'continuous',
-                   'evidence':[{**dict(row),'box':json.loads(row['box'])} for row in self.connection.execute(
-                       "SELECT frame_id,box,top_state,bottom_state,ocr_status FROM observations WHERE message_id=?", (message['id'],))]}
+                   **({'evidence':evidence} if include_evidence else {})}
 
     def export(self, output: Path, summary: dict):
         self.connection.commit()
