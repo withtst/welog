@@ -204,6 +204,67 @@ def test_frozen_animation_phase_keeps_media_guard(tmp_path):
     assert frames[-1]['action']['scroll_guard']=='media_dominated'
 
 
+@pytest.mark.parametrize('direction', ['up', 'down'])
+def test_white_sticker_run_uses_single_steps_even_when_all_frames_are_static(tmp_path, direction):
+    from test_screenshot_layout import white_sticker
+    from welog.recognition import TextLine
+
+    height = 663
+    world = np.full((2800, 880, 3), 247, np.uint8)
+    avatar = np.random.default_rng(97).integers(0, 256, (36, 36, 3), dtype=np.uint8)
+    photos = list(range(700, 2010, 152))
+    for y in photos:
+        world[y:y+132, 70:202] = white_sticker()
+        world[y:y+36, 20:56] = avatar
+    lines = [(y, f'message {y}') for y in [*range(22, 653, 72), *range(2082, 2780, 72)]]
+    for y, text in lines:
+        world[y:y+36, 20:56] = avatar
+        world[y:y+36, 65:230] = 233
+        cv2.putText(world, text, (74, y+25), cv2.FONT_HERSHEY_SIMPLEX, .53, (28,)*3, 1)
+
+    class Source:
+        end = len(world) - height
+        position = end if direction == 'up' else 0
+        pending = 0
+
+        def read(self):
+            steps = (0, 37, 104, 201, 300, 400)
+            delta = steps[self.pending] * (-1 if direction == 'up' else 1)
+            self.position = min(self.end, max(0, self.position + delta))
+            self.pending = 0
+            return world[self.position:self.position+height].copy()
+
+        def scroll(self, units):
+            assert (units < 0) == (direction == 'up')
+            self.pending += 1
+
+        def close(self):
+            pass
+
+    source = Source()
+
+    class KnownLines:
+        def recognize(self, image):
+            if len(image) != height:
+                return []
+            return [TextLine(text, (74, y+7-source.position, 188, y+30-source.position))
+                    for y, text in lines if 2 < y+7-source.position and y+30-source.position < height-2]
+
+    path = tmp_path/'capture'
+    result = run_capture(source, path, config=CaptureConfig(direction=direction, max_frames=0,
+        max_scroll_events=5, stable_samples=2, sample_interval_s=.001, settle_delay_s=0,
+        scroll_event_interval_s=0, boundary_wait_s=0), ocr_backend=KnownLines())
+    assert result['status'] == 'boundary_reached' and result['rejected'] == 0, result
+    assert result['final_scroll_offset_px'] == (-source.end if direction == 'up' else source.end)
+    frames = read_jsonl(path/'frames.jsonl')
+    guarded = [frame['action'] for frame in frames if frame['action'].get('scroll_guard') == 'media_dominated']
+    assert len(guarded) >= 5 and all(a['events'] == 1 and a['stability']['reason'] == 'static' for a in guarded)
+    rows = read_jsonl(path/'messages.jsonl')
+    assert [r['text'] for r in rows if r['type'] == 'text'] == [text for _, text in lines]
+    assert sum(r['type'] == 'image' for r in rows) == len(photos)
+    assert all(r['type'] != 'unknown' for r in rows)
+
+
 def test_frozen_media_risk_survives_two_text_anchors_near_the_leaving_edge(tmp_path):
     from welog.recognition import TextLine
     source=AnimatedConversation('up');positions=[(2160,'alpha'),(2220,'beta')]

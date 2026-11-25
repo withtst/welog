@@ -25,7 +25,10 @@ class FragmentAssembler:
             horizontal=min(x2,row['x2'])-max(x1,row['x1'])
             if {row['kind'],bubble.kind}=={'image','unknown'}:
                 clipped=not(row['head'] and row['tail']) or bubble.top_state!='visible' or bubble.bottom_state!='visible'
-                if not clipped or abs(x1-row['x1'])>8 or abs(x2-row['x2'])>8 or intersection<.8*min(bottom-top,row['bottom']-row['top']):continue
+                same_box=max(abs(x1-row['x1']),abs(x2-row['x2']),abs(top-row['top']),abs(bottom-row['bottom']))<=3
+                clipped_match=(clipped and abs(x1-row['x1'])<=8 and abs(x2-row['x2'])<=8
+                               and intersection>=.8*min(bottom-top,row['bottom']-row['top']))
+                if not same_box and not clipped_match:continue
             x_aligned=(abs(x1-row['x1'])<=8 and abs(x2-row['x2'])<=8) if bubble.kind=='text' else horizontal>=min(x2-x1,row['x2']-row['x1'])*.4
             if x_aligned and intersection>=min(6,(bottom-top)*.3):
                 candidates.append((intersection,row))

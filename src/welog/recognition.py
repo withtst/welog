@@ -150,6 +150,27 @@ def extend_media_components(image, regions, text_boxes=()):
     return [tuple(box) for box in result]
 
 
+def white_panel_graphic(patch):
+    """Find a substantial connected graphic inside a white message panel."""
+    height, width = patch.shape[:2]
+    if height < 24 or width < 45:
+        return False
+    mono = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
+    if (mono >= 245).mean() < .55:
+        return False
+    _, labels, stats, centers = cv2.connectedComponentsWithStats((mono < 205).astype(np.uint8))
+    for i, (x, y, w, h, area) in enumerate(stats[1:], 1):
+        if (w < max(20, width * .17) or h < max(20, height * .3)
+                or area < max(192, width * height * .022)
+                or not width * .24 <= centers[i, 0] <= width * .73):
+            continue
+        tones = mono[y:y+h, x:x+w][labels[y:y+h, x:x+w] == i]
+        low, high = np.percentile(tones, (10, 90))
+        if high - low >= 24:
+            return True
+    return False
+
+
 def detect_bubbles(bgr: np.ndarray, *, include_small_edge_media: bool = False) -> list[Bubble]:
     """Light-theme private-chat baseline. Keep long and viewport-clipped bodies."""
     from .text_rules import visual_notice_layers,suppress_visual_notice
@@ -181,12 +202,16 @@ def detect_bubbles(bgr: np.ndarray, *, include_small_edge_media: bool = False) -
             # median enough to masquerade as a gray text bubble.
             panel_white=color=='neutral' and np.median(patch[mask[y:y+bh,x:x+bw]])>251
             clipped=y<=1 or y+bh>=h-1
-            color_fraction=float((patch.max(2).astype(np.int16)-patch.min(2)>35).mean()) if panel_white else 0
-            white_content=panel_white and (bh>65 or (clipped and bw>=45 and bh>=16 and color_fraction>=.02))
-            kind = "unknown" if white_content else "text"
+            white_content=panel_white and (bh>65 or (clipped and bw>=45))
+            graphic = panel_white and white_panel_graphic(patch)
+            if graphic:
+                kind = "image"
+            else:
+                kind = "unknown" if white_content else "text"
             candidates.append(Bubble((x,y,x+bw,y+bh), direction, kind,
                                      "clipped" if y <= 1 else "visible",
-                                     "clipped" if y+bh >= h-1 else "visible"))
+                                     "clipped" if y+bh >= h-1 else "visible",
+                                     metadata={'image_layout': {'method': 'white_panel_graphic'}} if graphic else {}))
     # Non-bubble colored content is a media candidate, not OCR body text.
     foreground = (np.max(np.abs(values-bg),axis=2)>3).astype(np.uint8)
     contours,_ = cv2.findContours(foreground,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
@@ -206,6 +231,8 @@ def detect_bubbles(bgr: np.ndarray, *, include_small_edge_media: bool = False) -
         white_panel=np.median(patch)>251 and bh>65
         if colorful < .02 and not white_panel:
             continue
+        if colorful < .02 and any(b.kind=='image' and b.box==(x,y,x+bw,y+bh) for b in contained):
+            continue  # The white panel already has positive graphic evidence.
         candidates=[b for b in candidates if not any(b is item for item in contained)]
         candidates.append(Bubble((x,y,x+bw,y+bh),"incoming" if x<w*.25 else "outgoing","image" if colorful>=.02 else "unknown",
                                  "clipped" if y<=1 else "visible","clipped" if y+bh>=h-1 else "visible"))

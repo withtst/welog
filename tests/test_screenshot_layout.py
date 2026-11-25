@@ -6,7 +6,7 @@ import pytest
 
 from welog.file_cards import mark_candidates
 from welog.media_layout import screenshot_structure
-from welog.recognition import Bubble,TextLine,assign_lines
+from welog.recognition import Bubble,TextLine,assign_lines,detect_bubbles
 
 
 def screenshot():
@@ -72,6 +72,42 @@ def test_separate_unknown_card_and_image_are_not_merged(tmp_path):
         assembler.observe('b',Bubble((40,160,280,260),'incoming','image'),0,500)
         assert len(list(store.iter_messages()))==2
     finally:store.close()
+
+
+def white_sticker():
+    box = np.full((132, 132, 3), 255, np.uint8)
+    cv2.ellipse(box, (66, 74), (29, 49), 0, 0, 360, (92,)*3, -1)
+    cv2.ellipse(box, (73, 64), (18, 36), 0, 0, 360, (156,)*3, -1)
+    cv2.ellipse(box, (63, 109), (36, 9), 0, 0, 360, (128,)*3, -1)
+    return box
+
+
+@pytest.mark.parametrize('viewport', [slice(None), slice(60, 190), slice(0, 144)])
+def test_white_grayscale_sticker_is_image_at_full_size_and_clipped(viewport):
+    image = np.full((230, 440, 3), 247, np.uint8)
+    image[36:168, 70:202] = white_sticker()
+    bubbles = detect_bubbles(image[viewport])
+    expected_top = 'clipped' if viewport.start == 60 else 'visible'
+    expected_bottom = 'clipped' if viewport.stop == 144 else 'visible'
+    assert [(b.kind, b.top_state, b.bottom_state) for b in bubbles] == [
+        ('image', expected_top, expected_bottom)]
+
+
+def test_reobserved_full_image_replaces_unknown_at_same_coordinates(tmp_path):
+    from welog.assembler import FragmentAssembler
+    from welog.message_store import MessageStore
+
+    store = MessageStore(tmp_path/'messages.sqlite3')
+    try:
+        assembler = FragmentAssembler(store)
+        unknown = Bubble((70, 40, 202, 172), 'incoming', 'unknown')
+        image = Bubble((70, 140, 202, 272), 'incoming', 'image')
+        identity = assembler.observe('a', unknown, 0, 500)
+        assert assembler.observe('b', image, -100, 500) == identity
+        rows = list(store.iter_messages())
+        assert [(row['message_id'], row['type']) for row in rows] == [(identity, 'image')]
+    finally:
+        store.close()
 
 
 ROOT=Path('runs/pointer-20261117-123853-b3e31c/capture')

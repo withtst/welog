@@ -103,7 +103,12 @@ class FrameProcessor:
                 planning_anchors=[line for line in anchors if line.score>=.7 and len(line.text.strip())>=2 and counts[line.text]==1]
                 # Animation risk and the decision to slow down are separate:
                 # two visible lines can both leave the next overlap.
-                media_risk=sum(b.kind in {'image','unknown'} for b in bubbles)>=2 and (bool(masks) or self.media_risk)
+                media_layout=sum(b.kind in {'image','unknown'} for b in bubbles)>=2
+                # White-backed stickers can be perfectly stationary across
+                # samples and still make large cross-screen steps ambiguous.
+                static_stickers=sum(b.kind=='image' and b.metadata.get('image_layout',{}).get('method')=='white_panel_graphic'
+                                    for b in bubbles)>=2
+                media_risk=media_layout and (bool(masks) or self.media_risk or static_stickers)
                 media_guard=media_risk and len(planning_anchors)<2
                 registration_risk=media_risk or (raw_media_count>0 and len(planning_anchors)<2)
                 combined_masks = tuple(dict.fromkeys(tuple(masks)+overlay_masks))
