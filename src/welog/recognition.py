@@ -88,9 +88,20 @@ def achromatic_media_regions(image, text_boxes=(), *, include_small_edge_media=F
         small_edge=include_small_edge_media and clipped
         if bw<(8 if small_edge else 45) or bh<(2 if small_edge else 8 if clipped else 24) or bw*bh<(64 if small_edge else 256):continue
         if x<w*.05 or x+bw>w*.94 or not (x<w*.25 or x+bw>w*.75):continue
-        density=float(foreground[y:y+bh,x:x+bw].mean())
-        if not .15<=density<=(.95 if small_edge else .85):continue
-        if (mono[y:y+bh,x:x+bw]<background-35).mean()<.08:continue
+        patch = mono[y:y+bh, x:x+bw]
+        density = float(foreground[y:y+bh, x:x+bw].mean())
+        dark_fraction = float((patch < background - 35).mean())
+        if density < .15 or dark_fraction < .08:
+            continue
+        if density > (.95 if small_edge else .85):
+            # Dense grayscale photographs and GIF frames have no gaps in
+            # the silhouette. Require substantial tonal variation across
+            # their interior so flat panels and clipped glyphs stay excluded.
+            if bw < 45 or bh < 24 or dark_fraction < .5:
+                continue
+            low, high = np.percentile(patch, (10, 90))
+            if high - low < 48:
+                continue
         if image.ndim==3:
             patch=image[y:y+bh,x:x+bw].astype(np.int16)
             if (patch.max(2)-patch.min(2)>35).mean()>=.02:continue

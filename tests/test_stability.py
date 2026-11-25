@@ -1,9 +1,11 @@
 import cv2
 import numpy as np
+import pytest
 
 from welog.controller import wait_for_stable
 from welog.demo import make_scene
 from welog.models import AlignmentConfig, CaptureConfig
+from welog.recognition import achromatic_media_regions
 from welog.stability import LayoutStabilityDetector
 
 
@@ -99,3 +101,40 @@ def test_border_rule_does_not_swallow_low_contrast_messages_moving_interior():
         sample[0, 67:80] -= i
         result = detector.observe(sample)
     assert not result.stable
+
+
+@pytest.mark.parametrize('grayscale', [False, True])
+def test_dense_grayscale_animation_clipped_at_viewport_edges_is_local(grayscale):
+    rng = np.random.default_rng(33109)
+    height, width = 663, 880
+    scene = np.full((height+12, width), 247, np.uint8)
+    graphics = [(0, 77), (153, 285), (361, 493), (569, height+12)]
+    avatar = rng.integers(0, 210, (36, 36), dtype=np.uint8)
+    for index, y in enumerate((97, 305, 513)):
+        scene[y:y+36, 20:56] = avatar
+        cv2.rectangle(scene, (65, y), (232, y+35), 235, -1)
+        cv2.putText(scene, f'Fixed message {index}', (81, y+24),
+                    cv2.FONT_HERSHEY_SIMPLEX, .55, 30, 1, cv2.LINE_AA)
+
+    def sample(offset):
+        image = scene.copy()
+        for top, bottom in graphics:
+            image[top:bottom, 70:192] = rng.integers(20, 205, (bottom-top, 122), dtype=np.uint8)
+        viewport = image[offset:offset+height]
+        return viewport if grayscale else cv2.cvtColor(viewport, cv2.COLOR_GRAY2BGR)
+
+    stationary = LayoutStabilityDetector(AlignmentConfig())
+    moving = LayoutStabilityDetector(AlignmentConfig())
+    for offset in (0, 4, 8):
+        result = stationary.observe(sample(0))
+        assert not moving.observe(sample(offset)).stable
+    assert result.stable, result.to_dict()
+    assert result.dynamic_masks and result.outside_media_pixels == 0
+    assert result.media_supported_ratio == 1
+
+
+def test_dense_gray_flat_panel_with_sparse_text_is_not_media():
+    image = np.full((300, 400), 247, np.uint8)
+    image[225:, 65:195] = 130
+    cv2.putText(image, 'simple text', (76, 265), cv2.FONT_HERSHEY_SIMPLEX, .5, 40, 1)
+    assert not achromatic_media_regions(image, include_small_edge_media=True)
