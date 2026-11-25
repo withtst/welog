@@ -30,6 +30,21 @@ class StabilityResult:
         return asdict(self)
 
 
+def minor_border_noise(difference):
+    # A clipped graphic may flicker in a small patch. The interior must
+    # remain exact, and the perimeter changes must be faint and limited.
+    total = np.count_nonzero(difference)
+    if not difference[1:-1, 1:-1].any() and total <= 64 and difference.max() <= 4:
+        return True
+    for edge in (difference[:6], difference[-6:]):
+        if not 0 < total <= 96 or edge.max() > 12 or np.count_nonzero(edge) != total:
+            continue
+        columns = np.flatnonzero(edge.any(axis=0))
+        if columns[-1] - columns[0] < 32 and np.count_nonzero(edge > 10) <= 2:
+            return True
+    return False
+
+
 class LayoutStabilityDetector:
     def __init__(self, alignment: AlignmentConfig, samples: int = 3, max_dynamic_ratio: float = 0.12,max_media_dynamic_ratio: float = .5):
         if samples < 2 or not 0 <= max_dynamic_ratio <= 0.2:
@@ -80,14 +95,10 @@ class LayoutStabilityDetector:
         largest_difference[~valid] = 0
         if not largest_difference.any():
             return StabilityResult(True, "static", len(self.history),overlay_masks=overlays)
-        # Window capture can vary by a few gray levels at a clipped border.
-        # Require exact agreement across the interior and tightly bound both
-        # the number and amplitude of the changed perimeter pixels.
-        if (not largest_difference[1:-1, 1:-1].any()
-                and np.count_nonzero(largest_difference) <= 64 and largest_difference.max() <= 4):
+        if minor_border_noise(largest_difference):
             return StabilityResult(True, "minor_border_noise", len(self.history),overlay_masks=overlays)
-        changed = largest_difference > 10
         height, width = reference.shape
+        changed = largest_difference > 10
         tile = 32
         masks: list[Rect] = []
         area = 0

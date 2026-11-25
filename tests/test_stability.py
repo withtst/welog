@@ -138,3 +138,26 @@ def test_dense_gray_flat_panel_with_sparse_text_is_not_media():
     image[225:, 65:195] = 130
     cv2.putText(image, 'simple text', (76, 265), cv2.FONT_HERSHEY_SIMPLEX, .5, 40, 1)
     assert not achromatic_media_regions(image, include_small_edge_media=True)
+
+
+@pytest.mark.parametrize('patch,amplitude,stable', [
+    ((657, 663, 687, 700), 10, True),
+    ((0, 6, 687, 700), 10, True),
+    ((656, 662, 687, 700), 10, False),
+    ((661, 663, 687, 723), 10, False),
+    ((657, 663, 687, 700), 14, False),
+])
+def test_faint_edge_fragment_does_not_require_text_anchors(patch, amplitude, stable):
+    scene = np.full((663, 880, 3), 247, np.uint8)
+    for top in (55, 205, 355):
+        cv2.putText(scene, 'repeat', (75, top), cv2.FONT_HERSHEY_SIMPLEX, .6, (80,)*3, 2)
+    y1, y2, x1, x2 = patch
+    detector = LayoutStabilityDetector(AlignmentConfig())
+    for level in (0, 4, amplitude):
+        sample = scene.copy()
+        sample[y1:y2, x1:x2] -= level
+        result = detector.observe(sample)
+    if stable:
+        assert result.stable and result.reason == 'minor_border_noise'
+    else:
+        assert result.reason != 'minor_border_noise'

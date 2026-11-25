@@ -33,7 +33,7 @@ from .exports import discover_sessions
 from .records_ui import RecordsPanel
 from .record_actions import delete_record, plan_deletion
 from .record_state import record_name
-from .resume import ResumeError, load_resume_point
+from .resume import ResumeError, load_resume_header, load_resume_point
 from .exports import RecordSource
 
 logger = logging.getLogger("welog.gui")
@@ -588,7 +588,7 @@ class CaptureWindow(QMainWindow):
             directory = source.path.parent
             if source.path.name != 'messages.sqlite3':
                 raise ResumeError('请打开原始采集记录的消息库。')
-            point = load_resume_point(directory)
+            point = load_resume_header(directory)
             if not point.metadata.get('target') or not point.metadata.get('roi'):
                 raise ResumeError('所选记录缺少微信窗口校准信息。')
         except (OSError, ValueError, KeyError, TypeError) as error:

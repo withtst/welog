@@ -1,6 +1,7 @@
 import hashlib
 import json
 
+import numpy as np
 import pytest
 
 from test_full_capture import Conversation, KnownText
@@ -27,6 +28,60 @@ def start_record(path, direction):
 def snapshot(path):
     return {file.relative_to(path): hashlib.sha256(file.read_bytes()).hexdigest()
             for file in path.rglob('*') if file.is_file()}
+
+
+@pytest.mark.parametrize('case', ['same_viewport', 'different_viewport', 'invalid_checksum'])
+def test_resume_uses_pending_wheel_bounds_only_for_verified_diagnostic(tmp_path, monkeypatch, case):
+    from dataclasses import replace
+    from welog import resume
+    from welog.imageio import write_image
+    from welog.models import AlignmentConfig, AlignmentResult
+
+    path = tmp_path / 'capture'
+    start_record(path, 'up')
+    point = load_resume_point(path)
+    image = np.full((point.frame['height'], point.frame['width'], 3), 242, np.uint8)
+    image[40:70, 100:130] = 60
+    diagnostic = path/'pending.png'
+    write_image(diagnostic, image)
+    digest = hashlib.sha256(diagnostic.read_bytes()).hexdigest()
+    bounds = {'minimum': -120, 'maximum': 0}
+    frame = {'frame_id': f"{int(point.frame['frame_id'])+1:06d}", 'height': image.shape[0],
+             'image': diagnostic.name, 'sha256': digest if case != 'invalid_checksum' else '',
+             'action': {'kind': 'unstable_diagnostic',
+                        'attempted_action': {'kind': 'scroll', 'event_units': -120, 'events': 1,
+                                             'motion_bounds': bounds}}}
+    decision = {'reference_id': point.frame['frame_id'], 'alignment': {'reason': 'stability_timeout'}}
+    config = point.capture_config()
+    point = replace(point, pending_scroll=resume._pending_scroll(
+        path.resolve(), point.frame['frame_id'], frame, decision, {}, config, -1))
+    calls = []
+
+    class Tracker:
+        def __init__(self, *_):
+            pass
+
+        def accept(self, image, frame_id, lines, direction, masks, **kwargs):
+            if frame_id == 'resume-check':
+                calls.append(kwargs.get('motion_bounds'))
+                if kwargs.get('motion_bounds'):
+                    assert direction == 'up'
+                    return AlignmentResult(True, 'aligned', -37., .9), None, 'bounded_layout'
+            return AlignmentResult(False, 'ambiguous'), None, 'template'
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(resume, 'MotionTracker', Tracker)
+    if case == 'different_viewport':
+        image[40:70, 100:130] = 110
+    if case == 'same_viewport':
+        match, _ = point.verify(image, (), config, AlignmentConfig(), None)
+        assert match.delta_px == -37 and calls == [None, bounds]
+    else:
+        with pytest.raises(ResumeError):
+            point.verify(image, (), config, AlignmentConfig(), None)
+        assert calls == [None]
 
 
 @pytest.mark.parametrize('direction', ['up', 'down'])
