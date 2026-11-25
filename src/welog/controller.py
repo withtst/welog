@@ -20,6 +20,8 @@ from .windows import BackgroundTargetError, BackgroundTargetUnavailable
 
 logger=logging.getLogger('welog.capture')
 BACKGROUND_RETURN_TIMEOUT_S = float('inf')
+RESAMPLE_REASONS = {'page_still_scrolling', 'stationary_content_unconfirmed',
+                    'motion_outside_media', 'widespread_motion'}
 
 
 class Source(Protocol):
@@ -148,9 +150,30 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
             with budget.reserve(image.nbytes*2):return session.capture(image,action)
         return session.capture(image,action)
 
-    def stable_sample(stability, settings=config):
-        return with_target_available(
-            lambda: wait_for_stable(source,settings,alignment,stopped,stability,budget), 'read')
+    def stable_sample(stability, settings=config, *, retry_after_scroll=False):
+        def sample():
+            return with_target_available(
+                lambda: wait_for_stable(source,settings,alignment,stopped,stability,budget), 'read')
+
+        try:
+            return sample()
+        except StableTimeout as error:
+            reason = error.diagnostics.get('reason')
+            if not retry_after_scroll or error.latest is None or reason not in RESAMPLE_REASONS:
+                raise
+            for lease in error.temporal_frames:
+                lease.release()
+            logger.info('stability_resampling reason=%s posted_events=%s', reason, posted_events)
+        # Read the same viewport again. This does not send another wheel event
+        # or relax the stability and overlap requirements for committing it.
+        stability.clear()
+        try:
+            image = sample()
+        except StableTimeout as error:
+            error.diagnostics['resamples'] = 1
+            raise
+        stability['resamples'] = 1
+        return image
 
     def attempt(action, sample=None, resume_join=None):
         nonlocal accepted,rejected,offset,reference,last_action
@@ -161,7 +184,7 @@ def run_capture(source,output,*,config=None,alignment=None,metadata=None,progres
         last_attempt_image=None;last_attempt_frame=None;last_attempt_accepted=False
         if sample is None:
             stability = {}
-            image = stable_sample(stability)
+            image = stable_sample(stability, retry_after_scroll=action['kind']=='scroll' and config.recovery_attempts>0)
         else:
             image, stability = sample
         frame=capture_frame(image,{**action,'stability':stability})

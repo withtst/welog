@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pytest
 
 from welog.archive import read_jsonl
 from welog.controller import run_capture
@@ -62,6 +63,41 @@ def test_alignment_failure_only_retries_in_place(tmp_path):
     checkpoint = json.loads((tmp_path / "live/checkpoint.json").read_text())
     assert checkpoint["frame_id"] == "000000"
     assert source.closed
+
+
+@pytest.mark.parametrize('recovers', [True, False])
+def test_stability_timeout_resamples_once_without_sending_another_wheel(tmp_path, monkeypatch, recovers):
+    from welog import controller
+    from welog.recognition import EmptyOcr
+
+    source = FakeDesktop()
+    original = controller.wait_for_stable
+    scroll_reads = []
+
+    def stable(source, config, alignment, stopped, diagnostics, budget):
+        if source.scrolls:
+            scroll_reads.append(source.scrolls.copy())
+            if len(scroll_reads) == 1 or not recovers:
+                image = source.read()
+                lease = budget.copy(image)
+                raise controller.StableTimeout(image, {'reason': 'stationary_content_unconfirmed'}, [lease])
+        return original(source, config, alignment, stopped, diagnostics, budget)
+
+    monkeypatch.setattr(controller, 'wait_for_stable', stable)
+    output = tmp_path/'capture'
+    result = run_capture(source, output, config=CaptureConfig(max_frames=2, max_scroll_events=1,
+        stable_samples=2, sample_interval_s=.001, settle_delay_s=0), ocr_backend=EmptyOcr())
+    assert source.scrolls == [120] and scroll_reads == [[120], [120]]
+    assert result['image_memory_remaining_bytes'] == 0 and source.closed
+    frames = read_jsonl(output/'frames.jsonl')
+    assert frames[-1]['action']['stability']['resamples'] == 1
+    if recovers:
+        assert result['accepted'] == 2 and result['rejected'] == 0
+        assert result['final_scroll_offset_px'] == 120
+    else:
+        assert result['reason'] == 'StableTimeout'
+        assert result['accepted'] == 1 and result['rejected'] == 1
+        assert result['final_scroll_offset_px'] == 0
 
 
 def test_foreground_loss_is_archived_and_resources_are_released(tmp_path):

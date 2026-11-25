@@ -124,8 +124,16 @@ class LayoutStabilityDetector:
         media_boxes=[]
         supported=np.zeros(reference.shape,dtype=bool)
         for boxes in self.media_history:
-            for x1,y1,x2,y2 in boxes:supported[max(0,y1):y2,max(0,x1):x2]=True
-            media_boxes.extend(Rect(x1,y1,x2-x1,y2-y1) for x1,y1,x2,y2 in boxes)
+            for x1,y1,x2,y2 in boxes:
+                # Small detached animation details can sit just outside the
+                # detected body. Allow lateral spill only alongside a body
+                # that is itself changing, within the same vertical band.
+                margin = 0
+                if y2-y1 >= 24 and np.count_nonzero(changed[y1:y2,x1:x2]) >= 12:
+                    margin = min(12, (x2-x1)//4)
+                left, right = max(0,x1-margin), min(width,x2+margin)
+                supported[max(0,y1):y2,left:right]=True
+                media_boxes.append(Rect(left,y1,right-left,y2-y1))
         changed_count=int(changed.sum())
         outside=int((changed&~supported).sum())
         result.outside_media_pixels=outside

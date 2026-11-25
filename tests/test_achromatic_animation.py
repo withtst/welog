@@ -49,6 +49,39 @@ def test_gray_animation_and_heart_have_stationary_evidence_and_complete_motion_s
     assert result.media_supported_ratio>=.98 and result.outside_media_pixels<=64 and result.static_matches>=3
 
 
+@pytest.mark.parametrize('grayscale', [False, True])
+def test_detached_droplets_along_animating_graphics_have_media_support(grayscale):
+    boxes = [(110, y, 166, y+38) for y in (95, 247, 399)]
+    avatar = np.random.default_rng(271).integers(0, 256, (36, 36, 3), dtype=np.uint8)
+    detectors = [LayoutStabilityDetector(AlignmentConfig()) for _ in range(3)]
+    for phase in range(3):
+        results = []
+        for mode, detector in enumerate(detectors):
+            image = np.full((663, 880, 3), 247, np.uint8)
+            for x1, y1, x2, y2 in boxes:
+                image[y1-50:y1-14, 20:56] = avatar
+                body = 50 if mode == 2 else 50 + 36 * phase
+                image[y1:y2, x1:x2] = (200, body, 70)
+                if phase:
+                    gap = 7 if mode != 1 else 25
+                    for x in (x1-gap, x2+gap):
+                        cv2.circle(image, (x, y1+15), 3, (220, 135, 90), -1)
+            for y, text in ((498, 'first fixed message'), (565, 'another fixed message')):
+                image[y:y+36, 580:819] = (156, 237, 156)
+                cv2.putText(image, text, (596, y+25), cv2.FONT_HERSHEY_SIMPLEX, .55, (25,)*3, 1)
+            if grayscale:
+                result = detector.observe(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY), media_regions=boxes)
+            else:
+                result = detector.observe(image)
+            results.append(result)
+
+    # The strip is narrow and belongs only to an actively changing body.
+    # Distant motion and the same droplets beside static graphics do not qualify.
+    assert results[0].stable and results[0].outside_media_pixels == 0
+    assert results[0].media_supported_ratio == 1
+    assert all(result.outside_media_pixels > 64 for result in results[1:])
+
+
 def test_gray_media_does_not_hide_page_or_message_text_movement():
     detector=LayoutStabilityDetector(AlignmentConfig())
     for offset in range(6):assert not detector.observe(render(offset,900)[offset:offset+663]).stable
