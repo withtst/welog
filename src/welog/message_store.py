@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .archive import write_json
 from .text_rules import audio_duration
+from .timeline import TimelineIndex
 
 
 class MessageStore:
@@ -22,6 +23,7 @@ class MessageStore:
                 text TEXT,score REAL,clipped INTEGER);
             CREATE TABLE observations(message_id TEXT,frame_id TEXT,box TEXT,top_state TEXT,bottom_state TEXT,ocr_status TEXT);
             CREATE INDEX message_location ON messages(direction,top,bottom);
+            CREATE INDEX message_order ON messages(top,x1,id);
             CREATE INDEX line_location ON lines(message_id,top,bottom);
             CREATE INDEX observation_message ON observations(message_id);
         ''')
@@ -29,6 +31,15 @@ class MessageStore:
             from .timeline import SCHEMA
             self.connection.executescript(SCHEMA+'''CREATE TABLE IF NOT EXISTS message_details(message_id TEXT PRIMARY KEY,data TEXT);''')
         self.tables={row[0] for row in self.connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if not readonly and not initialize:
+            self.connection.executescript('''
+                CREATE INDEX IF NOT EXISTS message_order ON messages(top,x1,id);
+                CREATE INDEX IF NOT EXISTS observation_message ON observations(message_id);
+            ''')
+
+    def timeline(self, *, include_evidence=False):
+        if 'time_markers' in self.tables:
+            return TimelineIndex(self.connection, include_evidence=include_evidence)
 
     def evidence_for(self, message_ids):
         result = {message_id: [] for message_id in message_ids}
@@ -45,10 +56,11 @@ class MessageStore:
                 result[message_id].append(item)
         return result
 
-    def _message_rows(self, include_evidence):
+    def _message_rows(self, include_evidence, offset, limit):
         # Upward capture discovers older messages later at negative coordinates.
         # Ascending global top is chronological in either direction; never reverse by frame order.
-        cursor = self.connection.execute("SELECT * FROM messages ORDER BY top,x1,id")
+        cursor = self.connection.execute(
+            "SELECT * FROM messages ORDER BY top,x1,id LIMIT ? OFFSET ?", (-1 if limit is None else limit, offset))
         if not include_evidence:
             for message in cursor:
                 yield message, None
@@ -58,8 +70,9 @@ class MessageStore:
             for message in batch:
                 yield message, evidence[message['id']]
 
-    def iter_messages(self, *, include_evidence=True):
-        for message, evidence in self._message_rows(include_evidence):
+    def iter_messages(self, *, include_evidence=True, offset=0, limit=None, include_timeline=True):
+        timeline = self.timeline(include_evidence=include_evidence) if include_timeline else None
+        for message, evidence in self._message_rows(include_evidence, offset, limit):
             lines = self.connection.execute("SELECT * FROM lines WHERE message_id=? ORDER BY top,x1", (message['id'],)).fetchall()
             readable = any(line['text'] for line in lines)
             text = '\n'.join(line['text'] for line in lines)
@@ -72,9 +85,8 @@ class MessageStore:
             if 'message_details' in self.tables:
                 detail=self.connection.execute('SELECT data FROM message_details WHERE message_id=?',(message['id'],)).fetchone()
                 if detail:details=json.loads(detail['data'])
-            if 'time_markers' in self.tables:
-                from .timeline import interval_for
-                details['time_interval']=interval_for(self.connection,message['top'],message['bottom'])
+            if timeline is not None:
+                details['time_interval'] = timeline.interval(message['top'], message['bottom'])
             yield {**details,'message_id':message['id'],'direction':message['direction'],'type':message['kind'],
                    'text':text if message['kind'] in {'text','audio'} else details.get('file',{}).get('filename',text or '[文件]') if message['kind']=='file' else '[图片]' if message['kind']=='image' else '[未知消息]',
                    **({'duration_seconds':duration} if message['kind']=='audio' else {}),

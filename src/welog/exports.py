@@ -94,6 +94,41 @@ def discover_sessions(root:Path,limit=200):
     return sorted(found,key=lambda path:path.stat().st_mtime,reverse=True)[:limit]
 
 
+def preview_database_page(source: RecordSource, *, offset=0, limit=200):
+    """Hydrate only the requested message bodies, evidence and edits."""
+    from .record_state import connect, describe, project_rows, record_timeline
+
+    store = MessageStore(source.path, initialize=False, readonly=True)
+    try:
+        with connect(source) as state:
+            total = store.connection.execute('SELECT COUNT(*) FROM messages').fetchone()[0]
+            timeline = record_timeline(source, state, store, include_evidence=True)
+            edited = state.execute('SELECT COUNT(*) FROM edits').fetchone()[0] if state is not None else 0
+            records = store.iter_messages(offset=offset, limit=limit, include_timeline=False)
+            rows = list(project_rows(map(source.normalize, records), state, timeline))
+            if timeline:
+                positions = store.connection.execute('SELECT top,bottom FROM messages ORDER BY top,x1,id')
+                groups = timeline.group_counts(positions)
+            else:
+                groups = {'未定位': total} if total else {}
+    finally:
+        store.close()
+
+    # The finalized capture already counted completeness. Legacy records and
+    # manually edited records compute their exact totals in Record Info.
+    incomplete = None
+    if not edited:
+        try:
+            report = json.loads(source.path.with_name('report.json').read_text(encoding='utf-8'))
+            if report.get('messages') == total and isinstance(report.get('complete'), int):
+                incomplete = total - report['complete']
+        except (AttributeError, OSError, ValueError):
+            pass
+    statistics = {'total': total, 'incomplete': incomplete, 'edited': edited, 'time_groups': groups}
+    return {'rows': rows, 'matched': total, 'total': total, 'incomplete': incomplete, 'offset': offset,
+            'statistics': statistics, 'metadata': describe(source, statistics)}
+
+
 def preview_records(source:RecordSource,*,offset=0,limit=200,search='',time_filter=''):
     from .timeline import interval_label
     rows=[];count=0;total=0;incomplete=0

@@ -10,7 +10,7 @@ from welog.file_cards import mark_candidates
 from welog.message_store import MessageStore
 from welog.recognition import Bubble,TextLine,assign_lines
 from welog.record_state import connect,rebuild_intervals
-from welog.timeline import CHAT_TZ,interval_for,observe_markers,parse_timestamp
+from welog.timeline import CHAT_TZ,TimelineIndex,interval_for,observe_markers,parse_timestamp
 
 
 @pytest.mark.parametrize('raw,expected',[
@@ -43,6 +43,9 @@ def test_intervals_are_derived_from_global_position_in_both_scan_directions(tmp_
         assert middle['start']=='2025-12-02T12:41+08:00' and middle['end']=='2025-12-02T14:22+08:00'
         assert middle['precision']=='interval' and 'sent_at' not in rows[1]
         assert store.connection.execute('SELECT COUNT(*) FROM time_markers').fetchone()[0]==2
+        index = TimelineIndex(store.connection, include_evidence=True)
+        for top, bottom in [(0, 30), (115, 300), (109, 305), (320, 400)]:
+            assert index.interval(top, bottom) == interval_for(store.connection, top, bottom)
         store.connection.commit()
         source=RecordSource(tmp_path)
         stats=preview_records(source)

@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 
 from .archive import write_json
 from .desktop_theme import GlassCard, label, primary
-from .exports import ExportOptions, FORMATS, RecordSource, STATUS_NAMES, TYPE_NAMES, export_records, preview_records
+from .exports import ExportOptions, FORMATS, RecordSource, STATUS_NAMES, TYPE_NAMES, export_records, preview_database_page, preview_records
 from .record_state import describe, rebuild_intervals, rename_record, replace_attachment, reset_edit, resolve_attachment, save_edit
 from .record_dialogs import MessageEditDialog, RecordInfoDialog
 from .timeline import interval_brief, interval_label
@@ -25,18 +25,24 @@ class RecordLoadWorker(QThread):
     ready=Signal(dict)
     failed=Signal(str)
 
-    def __init__(self,path,offset,search,time_filter='',parent=None):
+    def __init__(self,path,offset,search,time_filter='',parent=None,*,details=False):
         super().__init__(parent)
         self.path,self.offset,self.search=Path(path),offset,search
         self.time_filter=time_filter
+        self.details=details
 
     def run(self):
         try:
             source=RecordSource(self.path)
             warning=''
-            try:rebuild_intervals(source)
-            except (OSError,ValueError,sqlite3.Error,KeyError,TypeError) as error:warning=type(error).__name__
-            self.ready.emit({**preview_records(source,offset=self.offset,search=self.search,time_filter=self.time_filter),
+            if source.is_database and not (self.details or self.search.strip() or self.time_filter):
+                result = preview_database_page(source, offset=self.offset)
+            else:
+                try:rebuild_intervals(source, legacy_only=True)
+                except (OSError,ValueError,sqlite3.Error,KeyError,TypeError) as error:warning=type(error).__name__
+                result = preview_records(source,offset=self.offset,limit=0 if self.details else 200,
+                                         search=self.search,time_filter=self.time_filter)
+            self.ready.emit({**result,
                              'path':str(source.path),'time_filter':self.time_filter,'timeline_warning':warning})
         except Exception as error:self.failed.emit(str(error))
 
@@ -340,18 +346,22 @@ class RecordsPanel(QWidget):
         self.metadata=result['metadata']
         if changed:self.title.setText(self.metadata['name'])
         self.rows=result['rows']
+        previous_groups = self.page['statistics']['time_groups'] if self.page else None
         self.page=result
         self.offset=result['offset']
         path=self.source.path
         self.source_label.setText(self.metadata['name'])
         self.source_label.setToolTip(str(path))
-        statistics=f"{result['total']:,} 条消息 · {result['incomplete']:,} 条待核对"
+        statistics=f"{result['total']:,} 条消息"
+        if result['incomplete'] is not None:statistics+=f" · {result['incomplete']:,} 条待核对"
         if self.search.text().strip():statistics+=f" · 匹配 {result['matched']:,} 条"
         self.stats.setText(statistics)
         self.time_filter.blockSignals(True)
-        self.time_filter.clear()
-        self.time_filter.addItem('全部时间段','')
-        for group,count in result['statistics']['time_groups'].items():self.time_filter.addItem(f'{group} ({count})',group)
+        groups = result['statistics']['time_groups']
+        if changed or previous_groups != groups:
+            self.time_filter.clear()
+            self.time_filter.addItem('全部时间段','')
+            for group,count in groups.items():self.time_filter.addItem(f'{group} ({count})',group)
         self.time_filter.setCurrentIndex(max(0,self.time_filter.findData(result.get('time_filter',''))))
         self.time_filter.blockSignals(False)
         self.time_filter.setToolTip(self.time_filter.currentData() or 'UTC+08:00')
@@ -410,7 +420,26 @@ class RecordsPanel(QWidget):
         except (OSError,ValueError) as error:self.feedback.setText('重命名失败：'+str(error))
 
     def show_info(self):
-        if self.source and not self.busy():RecordInfoDialog(self.metadata,self).exec()
+        if not self.source or self.busy():
+            return
+        if 'type_counts' in self.metadata.get('statistics', {}):
+            RecordInfoDialog(self.metadata,self).exec()
+            return
+        generation = self._generation
+        worker = RecordLoadWorker(self.source.path, 0, '', parent=self, details=True)
+        self.load_worker = worker
+        self.feedback.setText('正在统计记录…')
+        worker.ready.connect(lambda result: self._show_loaded_info(result, generation))
+        worker.failed.connect(lambda message: self._load_failed(message, generation))
+        worker.finished.connect(self._load_finished)
+        worker.start()
+        self.update_actions()
+
+    def _show_loaded_info(self, result, generation):
+        if generation == self._generation:
+            self.metadata = result['metadata']
+            self.feedback.clear()
+            RecordInfoDialog(self.metadata, self).exec()
 
     def mutate(self,action):
         if self.busy():return

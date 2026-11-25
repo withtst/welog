@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from welog.exports import ExportOptions, FORMATS, RecordSource, discover_sessions, export_records, filename_stem, preview_records
+from welog.exports import ExportOptions, FORMATS, RecordSource, discover_sessions, export_records, filename_stem, preview_database_page, preview_records
 from welog.message_store import MessageStore
 
 
@@ -148,3 +148,31 @@ def test_sqlite_preview_hydrates_only_visible_evidence_in_legacy_store(tmp_path,
     assert page['rows'][0]['evidence'][0]['box'] == [1, 2, 3, 4]
     assert preview_records(RecordSource(path), limit=0)['total'] == 25
     assert len(calls) == 1 and path.read_bytes() == before
+
+
+def test_database_page_hydrates_only_requested_message_bodies(tmp_path, monkeypatch):
+    path = tmp_path/'messages.sqlite3'
+    store = MessageStore(path)
+    for i in reversed(range(610)):
+        store.connection.execute('INSERT INTO messages VALUES (?,?,?,?,?,?,?,?,?,?)',
+                                 (str(i), 'incoming', 'image', 1, 90, i*100, i*100+80, 1, 1, 0))
+    store.close()
+    before = path.read_bytes()
+    seen = []
+    original = MessageStore.iter_messages
+
+    def iter_messages(self, **kwargs):
+        for row in original(self, **kwargs):
+            seen.append(row['message_id'])
+            yield row
+
+    monkeypatch.setattr(MessageStore, 'iter_messages', iter_messages)
+    source = RecordSource(path)
+    first = preview_database_page(source, limit=200)
+    assert len(seen) == 200 and seen == [str(i) for i in range(200)]
+    assert first['total'] == first['matched'] == 610 and first['statistics']['time_groups'] == {'未定位': 610}
+    assert first['incomplete'] is None
+    next_page = preview_database_page(source, offset=200, limit=200)
+    assert seen == [str(i) for i in range(400)]
+    assert next_page['rows'][0]['message_id'] == '200'
+    assert path.read_bytes() == before

@@ -1,6 +1,6 @@
 """Names, edits and user-imported attachments live beside immutable OCR source data."""
 from __future__ import annotations
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -10,7 +10,7 @@ import re
 import sqlite3
 from uuid import uuid4
 
-from .timeline import SCHEMA, interval_for
+from .timeline import SCHEMA, TimelineIndex
 
 KINDS=('text','audio','image','file','share','unknown')
 IMAGE_EXTENSIONS={'.png','.jpg','.jpeg','.webp','.gif','.bmp'}
@@ -76,19 +76,52 @@ def rename_record(source,name):
 
 
 def project_records(source, *, include_evidence=True):
-    from .file_cards import reclassify_stored_record
+    from .message_store import MessageStore
     with connect(source) as db:
-        markers=bool(db and db.execute('SELECT 1 FROM time_markers LIMIT 1').fetchone())
-        for row in source.raw_records(include_evidence=include_evidence):
-            original=row
-            row=reclassify_stored_record(row)
-            edit=db.execute('SELECT patch,updated_at FROM edits WHERE message_id=?',(row['message_id'],)).fetchone() if db else None
-            if edit:
-                row={**row,**json.loads(edit['patch']),'edited':True,'edited_at':edit['updated_at']}
-                row['original_message']={key:original.get(key) for key in ['text','type','direction','status','duration_seconds','file'] if key in original}
-            if markers and isinstance(row.get('global_top_px'),(int,float)) and isinstance(row.get('global_bottom_px'),(int,float)):
-                row={**row,'time_interval':interval_for(db,row['global_top_px'],row['global_bottom_px'])}
-            yield row
+        if source.is_database:
+            store = MessageStore(source.path, initialize=False, readonly=True)
+            try:
+                timeline = record_timeline(source, db, store, include_evidence=include_evidence)
+                rows = map(source.normalize, store.iter_messages(include_evidence=include_evidence, include_timeline=False))
+                yield from project_rows(rows, db, timeline)
+            finally:
+                store.close()
+        else:
+            timeline = record_timeline(source, db, include_evidence=include_evidence)
+            yield from project_rows(source.raw_records(include_evidence=include_evidence), db, timeline)
+
+
+def journal_signature(source):
+    root = source.path.parent
+    try:
+        alignment, observations = [(root/name).stat() for name in ('alignments.jsonl', 'observations.jsonl')]
+    except FileNotFoundError:
+        return None
+    return [alignment.st_mtime_ns, alignment.st_size, observations.st_mtime_ns, observations.st_size]
+
+
+def record_timeline(source, db, store=None, *, include_evidence=False):
+    native = store.timeline(include_evidence=include_evidence) if store else None
+    if db is not None and (not native or get_meta(db, 'timeline_journal_signature') == journal_signature(source)):
+        sidecar = TimelineIndex(db, include_evidence=include_evidence)
+        if sidecar:
+            return sidecar
+    return native
+
+
+def project_rows(rows, db, timeline):
+    from .file_cards import reclassify_stored_record
+    has_edits = db is not None and db.execute('SELECT 1 FROM edits LIMIT 1').fetchone() is not None
+    for row in rows:
+        original=row
+        row=reclassify_stored_record(row)
+        edit=db.execute('SELECT patch,updated_at FROM edits WHERE message_id=?',(row['message_id'],)).fetchone() if has_edits else None
+        if edit:
+            row={**row,**json.loads(edit['patch']),'edited':True,'edited_at':edit['updated_at']}
+            row['original_message']={key:original.get(key) for key in ['text','type','direction','status','duration_seconds','file'] if key in original}
+        if timeline is not None and isinstance(row.get('global_top_px'),(int,float)) and isinstance(row.get('global_bottom_px'),(int,float)):
+            row={**row,'time_interval':timeline.interval(row['global_top_px'],row['global_bottom_px'])}
+        yield row
 
 
 def save_edit(source,record,patch):
@@ -186,14 +219,19 @@ def note_export(source,details):
         db.execute('INSERT INTO export_events(created_at,details) VALUES (?,?)',(now(),json.dumps(details,ensure_ascii=False)))
 
 
-def rebuild_intervals(source):
+def rebuild_intervals(source, *, legacy_only=False):
     """Backfill old recordings from confirmed text journals; no original image is needed."""
     from .recognition import TextLine
     from .timeline import observe_markers,CHAT_TZ
     root=source.path.parent
     alignment,observations=root/'alignments.jsonl',root/'observations.jsonl'
-    if not alignment.is_file() or not observations.is_file():return
-    signature=[alignment.stat().st_mtime_ns,alignment.stat().st_size,observations.stat().st_mtime_ns,observations.stat().st_size]
+    signature=journal_signature(source)
+    if signature is None:return
+    if legacy_only and source.is_database:
+        with closing(sqlite3.connect(source.path.as_uri()+'?mode=ro', uri=True)) as native:
+            table = native.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='time_markers'").fetchone()
+            if table and native.execute('SELECT 1 FROM time_markers LIMIT 1').fetchone():
+                return
     with connect(source) as db:
         if get_meta(db,'timeline_journal_signature')==signature:return
     manifest=capture_metadata(source)

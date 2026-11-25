@@ -1,5 +1,7 @@
 """Visible timestamp separators define intervals, never exact per-message send times."""
 from __future__ import annotations
+from bisect import bisect_left
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 import json
 import re
@@ -46,7 +48,8 @@ def observe_markers(db,lines,offset,width,frame_id,reference=None):
         if not parsed:continue
         stamp,precision=parsed
         top,bottom=offset+y1,offset+y2
-        old=db.execute('SELECT * FROM time_markers WHERE ABS(top-?)<=5 AND time_iso=?',(top,stamp)).fetchone()
+        old=db.execute('SELECT * FROM time_markers WHERE top BETWEEN ? AND ? AND time_iso=? ORDER BY rowid LIMIT 1',
+                       (top-5,top+5,stamp)).fetchone()
         evidence={'frame_id':frame_id,'box':list(line.box),'raw':line.text,'score':line.score}
         if old:
             entries=json.loads(old['evidence'])
@@ -59,6 +62,10 @@ def observe_markers(db,lines,offset,width,frame_id,reference=None):
 def interval_for(db,top,bottom):
     before=db.execute('SELECT * FROM time_markers WHERE bottom<=? ORDER BY bottom DESC LIMIT 1',(top,)).fetchone()
     after=db.execute('SELECT * FROM time_markers WHERE top>=? ORDER BY top LIMIT 1',(bottom,)).fetchone()
+    return _interval(before, after)
+
+
+def _interval(before, after, include_evidence=True):
     start,end=(before['time_iso'] if before else None),(after['time_iso'] if after else None)
     status='bounded' if start and end else 'open_end' if start else 'open_start' if end else 'unassigned'
     if start and end and start>end:status='conflict'
@@ -66,7 +73,44 @@ def interval_for(db,top,bottom):
             'end_label':after['raw'] if after else None,'timezone':TZ_NAME,'precision':'interval','status':status,
             'start_marker_id':before['id'] if before else None,'end_marker_id':after['id'] if after else None,
             'start_precision':before['precision'] if before else None,'end_precision':after['precision'] if after else None,
-            'start_evidence':json.loads(before['evidence']) if before else [],'end_evidence':json.loads(after['evidence']) if after else []}
+            'start_evidence':json.loads(before['evidence']) if before and include_evidence else [],
+            'end_evidence':json.loads(after['evidence']) if after and include_evidence else []}
+
+
+class TimelineIndex:
+    """Read marker coordinates once, then find both bounds without scanning SQLite."""
+
+    def __init__(self, db, *, include_evidence=False):
+        evidence = ',evidence' if include_evidence else ''
+        self.after = list(db.execute(
+            f'SELECT rowid,id,top,bottom,raw,time_iso,precision{evidence} FROM time_markers ORDER BY top,bottom,rowid'))
+        self.before = sorted(self.after, key=lambda row: (-row['bottom'], row['rowid']))
+        self.tops = [row['top'] for row in self.after]
+        self.neg_bottoms = [-row['bottom'] for row in self.before]
+        self.include_evidence = include_evidence
+
+    def __bool__(self):
+        return bool(self.after)
+
+    def bounds(self, top, bottom):
+        before = bisect_left(self.neg_bottoms, -top)
+        after = bisect_left(self.tops, bottom)
+        return (self.before[before] if before < len(self.before) else None,
+                self.after[after] if after < len(self.after) else None)
+
+    def interval(self, top, bottom):
+        return _interval(*self.bounds(top, bottom), include_evidence=self.include_evidence)
+
+    def group_counts(self, positions):
+        groups = Counter()
+        labels = {}
+        for top, bottom in positions:
+            before, after = self.bounds(top, bottom)
+            key = (before['id'] if before else None, after['id'] if after else None)
+            if key not in labels:
+                labels[key] = interval_label({'time_interval': _interval(before, after, include_evidence=False)})
+            groups[labels[key]] += 1
+        return dict(groups)
 
 
 def interval_label(row):
