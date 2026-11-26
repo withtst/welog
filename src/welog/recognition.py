@@ -70,6 +70,13 @@ class EmptyOcr:
         return []
 
 
+def _inside_graphic(graphic, panel):
+    x1,y1,x2,y2=graphic
+    a,b,c,d=panel
+    return (x1<=a and y1<=b and c<=x2 and d<=y2
+            and (c-a)*(d-b)<=.6*(x2-x1)*(y2-y1))
+
+
 def achromatic_media_regions(image, text_boxes=(), *, include_small_edge_media=False):
     """Conservative gray silhouettes, including viewport-clipped graphics.
 
@@ -93,11 +100,18 @@ def achromatic_media_regions(image, text_boxes=(), *, include_small_edge_media=F
         dark_fraction = float((patch < background - 35).mean())
         if density < .15 or dark_fraction < .08:
             continue
-        if density > (.95 if small_edge else .85):
+        dense = density > (.95 if small_edge else .85)
+        cx,cy=x+bw/2,y+bh/2
+        competing_panels = [box for box in text_boxes if box[0]<=cx<box[2] and box[1]<=cy<box[3]]
+        box = (max(0,x-2),0 if y<=4 else y-2,min(w,x+bw+2),h if y+bh>=h-4 else y+bh+2)
+        if dense or competing_panels:
             # Dense grayscale photographs and GIF frames have no gaps in
-            # the silhouette. Require substantial tonal variation across
-            # their interior so flat panels and clipped glyphs stay excluded.
-            if bw < 45 or bh < 24 or dark_fraction < .5:
+            # their silhouette. A bright region inside one can also look
+            # like a bubble. A real panel can veto the media proposal unless
+            # the graphic fully encloses it and has independent texture.
+            if bw < 45 or bh < 24 or dark_fraction < .5 or density < .8:
+                continue
+            if any(not _inside_graphic(box, panel) for panel in competing_panels):
                 continue
             low, high = np.percentile(patch, (10, 90))
             if high - low < 48:
@@ -105,9 +119,7 @@ def achromatic_media_regions(image, text_boxes=(), *, include_small_edge_media=F
         if image.ndim==3:
             patch=image[y:y+bh,x:x+bw].astype(np.int16)
             if (patch.max(2)-patch.min(2)>35).mean()>=.02:continue
-        cx,cy=x+bw/2,y+bh/2
-        if any(a<=cx<c and b<=cy<d for a,b,c,d in text_boxes):continue
-        regions.append((max(0,x-2),0 if y<=4 else y-2,min(w,x+bw+2),h if y+bh>=h-4 else y+bh+2))
+        regions.append(box)
     return regions
 
 
@@ -268,6 +280,7 @@ def detect_bubbles(bgr: np.ndarray, *, include_small_edge_media: bool = False) -
     # Gray stickers can carry substantial motion despite having no chroma.
     for box in achromatic_media_regions(bgr,[b.box for b in candidates if b.kind=='text'],include_small_edge_media=include_small_edge_media):
         a,b,c,d=box
+        candidates=[item for item in candidates if item.kind!='text' or not _inside_graphic(box,item.box)]
         if any(item.kind in {'image','unknown'} and item.box[0]<=a and item.box[1]<=b and item.box[2]>=c and item.box[3]>=d for item in candidates):continue
         candidates.append(Bubble(box,'incoming' if a<w*.25 else 'outgoing','image',
             'clipped' if b==0 else 'visible','clipped' if d==h else 'visible'))

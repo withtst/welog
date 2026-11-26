@@ -82,6 +82,32 @@ def test_detached_droplets_along_animating_graphics_have_media_support(grayscale
     assert all(result.outside_media_pixels > 64 for result in results[1:])
 
 
+def test_clipped_grayscale_photo_with_bright_interior_keeps_its_full_media_region():
+    detector = LayoutStabilityDetector(AlignmentConfig(), max_dynamic_ratio=.08)
+    avatar = np.random.default_rng(381).integers(0, 256, (36, 36, 3), dtype=np.uint8)
+    for phase in range(3):
+        image = np.full((663, 880, 3), 247, np.uint8)
+        photo = np.full((132, 132, 3), 67+phase*31, np.uint8)
+        photo[:, 15:32] = 166
+        photo[:, 46:92] = 224
+        image[:54, 687:819] = photo[-54:]
+        for y in (74, 226, 378):
+            image[y:y+132, 687:819] = photo
+            image[y:y+36, 833:869] = avatar
+        cv2.rectangle(image, (683, 530), (817, 565), (153, 235, 153), -1)
+        cv2.putText(image, 'fixed sent text', (695, 554), cv2.FONT_HERSHEY_SIMPLEX, .48, (25,)*3, 1)
+        cv2.rectangle(image, (65, 586), (215, 621), (234,)*3, -1)
+        cv2.putText(image, 'fixed reply', (80, 610), cv2.FONT_HERSHEY_SIMPLEX, .48, (25,)*3, 1)
+        messages = detect_bubbles(image)
+        photos = [b for b in messages if b.kind == 'image']
+        assert len(photos) == 4 and photos[0].top_state == 'clipped'
+        assert photos[0].box[0] <= 687 and photos[0].box[2] >= 819
+        assert [b.box[1] for b in messages if b.kind == 'text'] == [530, 586]
+        result = detector.observe(image)
+    assert result.stable and result.outside_media_pixels == 0, result.to_dict()
+    assert result.reason == 'multiple_media_animation' and result.static_matches >= 3
+
+
 def test_gray_media_does_not_hide_page_or_message_text_movement():
     detector=LayoutStabilityDetector(AlignmentConfig())
     for offset in range(6):assert not detector.observe(render(offset,900)[offset:offset+663]).stable
