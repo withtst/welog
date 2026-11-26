@@ -71,11 +71,12 @@ class LayoutStabilityDetector:
         self.overlay_history.append(notices)
         working=suppress_visual_notice(image,segment if image.ndim==3 else notices)
         from .recognition import detect_bubbles,achromatic_media_regions,extend_media_components
+        hints=tuple(tuple(box) for box in media_regions) if media_regions is not None else ()
         regions=([b.box for b in detect_bubbles(working,include_small_edge_media=True) if b.kind=='image']
-                 if image.ndim==3 else achromatic_media_regions(working,include_small_edge_media=True))
+                 if image.ndim==3 else achromatic_media_regions(working,include_small_edge_media=True,media_seeds=hints))
         # Offline gray temporal samples retain their original RGB layout hints.
         # Re-detect gray silhouettes as well, so missed hints can be corrected.
-        if media_regions is not None:regions.extend(tuple(box) for box in media_regions)
+        regions.extend(hints)
         if image.ndim==2:regions=extend_media_components(working,regions)
         self.media_history.append(regions)
         overlays=list(dict.fromkeys(box for boxes in self.overlay_history for box in boxes))

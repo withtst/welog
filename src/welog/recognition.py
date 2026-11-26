@@ -77,7 +77,7 @@ def _inside_graphic(graphic, panel):
             and (c-a)*(d-b)<=.6*(x2-x1)*(y2-y1))
 
 
-def achromatic_media_regions(image, text_boxes=(), *, include_small_edge_media=False):
+def achromatic_media_regions(image, text_boxes=(), *, include_small_edge_media=False, media_seeds=()):
     """Conservative gray silhouettes, including viewport-clipped graphics.
 
     Rectangular chat panels and small disconnected glyphs remain text. These
@@ -90,6 +90,7 @@ def achromatic_media_regions(image, text_boxes=(), *, include_small_edge_media=F
     foreground[:4]=0;foreground[-4:]=0;foreground[:,:4]=0;foreground[:,-4:]=0
     contours,_=cv2.findContours(foreground,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
     regions=[]
+    short_fragments=[]
     for contour in contours:
         x,y,bw,bh=cv2.boundingRect(contour);clipped=y<=4 or y+bh>=h-4
         small_edge=include_small_edge_media and clipped
@@ -109,9 +110,11 @@ def achromatic_media_regions(image, text_boxes=(), *, include_small_edge_media=F
             # their silhouette. A bright region inside one can also look
             # like a bubble. A real panel can veto the media proposal unless
             # the graphic fully encloses it and has independent texture.
-            if bw < 45 or bh < 24 or dark_fraction < .5 or density < .8:
+            if bw < 45 or dark_fraction < .5 or density < .8:
                 continue
             if any(not _inside_graphic(box, panel) for panel in competing_panels):
+                continue
+            if bh < 24 and (not clipped or bh < 6 or density < .9 or competing_panels):
                 continue
             low, high = np.percentile(patch, (10, 90))
             if high - low < 48:
@@ -119,7 +122,18 @@ def achromatic_media_regions(image, text_boxes=(), *, include_small_edge_media=F
         if image.ndim==3:
             patch=image[y:y+bh,x:x+bw].astype(np.int16)
             if (patch.max(2)-patch.min(2)>35).mean()>=.02:continue
-        regions.append(box)
+        if dense and bh < 24:
+            short_fragments.append(box)
+        else:
+            regions.append(box)
+    # A heavily cropped photo may only leave a short, dense strip. Verify
+    # both lateral edges against another independently detected media body.
+    # A similarly placed but textureless or text-like strip still fails.
+    if short_fragments:
+        seeds = [box for box in (*regions, *media_seeds) if box[1]>4 and box[3]<h-4 and box[3]-box[1]>=32]
+        for box in short_fragments:
+            if any(abs(box[0]-seed[0])<=4 and abs(box[2]-seed[2])<=4 for seed in seeds):
+                regions.append(box)
     return regions
 
 
@@ -278,7 +292,9 @@ def detect_bubbles(bgr: np.ndarray, *, include_small_edge_media: bool = False) -
             candidates.append(Bubble((a,b,c,d),'incoming' if x<w*.25 else 'outgoing','image',
                 'clipped' if y<=8 else 'visible','clipped' if y+bh>=h-8 else 'visible'))
     # Gray stickers can carry substantial motion despite having no chroma.
-    for box in achromatic_media_regions(bgr,[b.box for b in candidates if b.kind=='text'],include_small_edge_media=include_small_edge_media):
+    for box in achromatic_media_regions(bgr,[b.box for b in candidates if b.kind=='text'],
+                                        include_small_edge_media=include_small_edge_media,
+                                        media_seeds=[b.box for b in candidates if b.kind=='image']):
         a,b,c,d=box
         candidates=[item for item in candidates if item.kind!='text' or not _inside_graphic(box,item.box)]
         if any(item.kind in {'image','unknown'} and item.box[0]<=a and item.box[1]<=b and item.box[2]>=c and item.box[3]>=d for item in candidates):continue

@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from welog.archive import read_jsonl
 from welog.models import AlignmentConfig,CaptureConfig,Rect
-from welog.recognition import detect_bubbles,EmptyOcr,extend_media_components
+from welog.recognition import achromatic_media_regions,detect_bubbles,EmptyOcr,extend_media_components
 from welog.stability import LayoutStabilityDetector
 from welog.controller import run_capture
 
@@ -106,6 +106,33 @@ def test_clipped_grayscale_photo_with_bright_interior_keeps_its_full_media_regio
         result = detector.observe(image)
     assert result.stable and result.outside_media_pixels == 0, result.to_dict()
     assert result.reason == 'multiple_media_animation' and result.static_matches >= 3
+
+
+@pytest.mark.parametrize('edge', ['top', 'bottom'])
+def test_short_dense_photo_fragment_requires_independent_edges_in_same_lane(edge):
+    height = 663
+    image = np.full((height, 880), 247, np.uint8)
+    photo = np.tile(np.linspace(38, 180, 132, dtype=np.uint8), (132, 1))
+    top = 0 if edge == 'top' else height-26
+    image[top:top+26, 70:202] = photo[:26]
+
+    def has_fragment(frame):
+        return any(y == 0 if edge == 'top' else bottom == height
+                   for _, y, _, bottom in achromatic_media_regions(frame, include_small_edge_media=True))
+
+    assert not has_fragment(image)
+    image[158:290, 85:217] = photo
+    assert not has_fragment(image)
+    image[158:290, 85:217] = 247
+    image[158:290, 70:202] = photo
+    assert has_fragment(image)
+    color = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    bubbles = detect_bubbles(color)
+    assert len(bubbles) == 2 and all(b.kind == 'image' for b in bubbles)
+    assert any((b.top_state if edge == 'top' else b.bottom_state) == 'clipped' for b in bubbles)
+
+    image[top:top+26, 70:202] = 154
+    assert not has_fragment(image)
 
 
 def test_gray_media_does_not_hide_page_or_message_text_movement():
